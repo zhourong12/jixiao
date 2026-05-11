@@ -9,15 +9,17 @@ export function isViteDevPath(pathname: string): boolean {
   if (pathname.includes('.hot-update')) return true;
   if (pathname.startsWith('/@')) return true;
   if (pathname.startsWith('/__vite')) return true;
+  if (pathname.startsWith('/.vite/')) return true;
   if (pathname.startsWith('/node_modules')) return true;
   if (pathname.startsWith('/client/')) return true;
+  if (pathname.startsWith('/src/')) return true;
   if (pathname.startsWith('/dev/')) return true;
   return false;
 }
 
 export function getViteProxy(): httpProxy {
   if (!proxy) {
-    const port = Number(process.env.CLIENT_DEV_PORT || 8080);
+    const port = Number(process.env.CLIENT_DEV_PORT || 5174);
     proxy = httpProxy.createProxyServer({
       target: `http://localhost:${port}`,
       ws: true,

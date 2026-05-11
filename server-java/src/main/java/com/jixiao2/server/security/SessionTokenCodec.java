@@ -30,9 +30,13 @@ public class SessionTokenCodec {
   public SessionTokenCodec(
       Environment environment, @Value("${jixiao2.session.secret:}") String configuredSecret) {
     String s = configuredSecret != null ? configuredSecret.trim() : "";
-    boolean prod =
-        java.util.Arrays.stream(environment.getActiveProfiles())
-            .anyMatch(p -> "prod".equals(p) || "production".equals(p));
+    boolean prod = false;
+    for (String p : environment.getActiveProfiles()) {
+      if ("prod".equals(p) || "production".equals(p)) {
+        prod = true;
+        break;
+      }
+    }
     if (s.isEmpty()) {
       s = prod ? "" : "dev-session-signing-key-jixiao2-local";
     }
@@ -80,7 +84,12 @@ public class SessionTokenCodec {
     }
     String jsonB64 = token.substring(0, i);
     String sig = token.substring(i + 1);
-    String expected = hmacBase64Url(jsonB64);
+    String expected;
+    try {
+      expected = hmacBase64Url(jsonB64);
+    } catch (Exception e) {
+      return null;
+    }
     if (!constantTimeEquals(sig, expected)) {
       return null;
     }
@@ -91,7 +100,7 @@ public class SessionTokenCodec {
       if (sub == null || sub.isEmpty()) {
         return null;
       }
-      if (!root.has("exp") || !root.get("exp").canConvertToLong()) {
+      if (!root.has("exp") || !root.get("exp").isNumber()) {
         return null;
       }
       long exp = root.get("exp").asLong();
@@ -102,11 +111,11 @@ public class SessionTokenCodec {
       if (name == null) {
         name = "";
       }
-      List<String> roles = new ArrayList<>();
+      List<String> roleList = new ArrayList<String>();
       if (root.has("roles") && root.get("roles").isArray()) {
         for (JsonNode r : root.get("roles")) {
           if (r.isTextual()) {
-            roles.add(r.asText());
+            roleList.add(r.asText());
           }
         }
       }
@@ -114,7 +123,7 @@ public class SessionTokenCodec {
           root.has("feishuOpenId") && root.get("feishuOpenId").isTextual()
               ? root.get("feishuOpenId").asText()
               : null;
-      return new SessionPayload(sub, name, roles, openId, exp);
+      return new SessionPayload(sub, name, roleList, openId, exp);
     } catch (Exception e) {
       return null;
     }

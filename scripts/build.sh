@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
 set -e
 cd "$(dirname "$0")/.." || exit 1
-npm run build:server
-npm run build:client
+(cd server-java && ./mvnw -DskipTests package)
+npm run build --prefix client-vue

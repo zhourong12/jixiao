@@ -10,8 +10,19 @@ spring:
     password: ${JIXIAO2_JDBC_PASSWORD:}
 
 jixiao2:
+  cors:
+    allowed-origin-patterns: ${JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   session:
     secret: ${SESSION_JWT_SECRET:}
+    cookie:
+      path: ${JIXIAO2_SESSION_COOKIE_PATH:/}
+      domain: ${JIXIAO2_SESSION_COOKIE_DOMAIN:}
+      same-site: ${JIXIAO2_SESSION_COOKIE_SAME_SITE:Lax}
+      secure: ${JIXIAO2_SESSION_COOKIE_SECURE:auto}
+  feishu:
+    app-id: ${FEISHU_APP_ID:}
+    app-secret: ${FEISHU_APP_SECRET:}
+    redirect-uri: ${FEISHU_REDIRECT_URI:}
 
 management:
   endpoints:

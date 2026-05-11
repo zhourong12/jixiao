@@ -54,11 +54,27 @@ public class EmployeeLookupService {
   }
 
   public String displayName(EmployeeRow row, String fallbackUsername) {
-    if (row.name() != null && !row.name().isBlank()) {
-      return row.name().trim();
+    if (row.getName() != null && !row.getName().trim().isEmpty()) {
+      return row.getName().trim();
     }
     return fallbackUsername;
   }
 
-  public record EmployeeRow(String employeeId, String name) {}
+  public static final class EmployeeRow {
+    private final String employeeId;
+    private final String name;
+
+    public EmployeeRow(String employeeId, String name) {
+      this.employeeId = employeeId;
+      this.name = name;
+    }
+
+    public String getEmployeeId() {
+      return employeeId;
+    }
+
+    public String getName() {
+      return name;
+    }
+  }
 }

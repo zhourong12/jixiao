@@ -1,3 +1,7 @@
+/**
+ * React + Vite 遗留入口（原 `client/`）。默认开发与生产前端已切至 `client-vue/`，
+ * 需要旧栈时用：`npm run dev:client-react` / `npm run build:client-react`。
+ */
 import path from 'path';
 import { defineConfig } from '@lark-apaas/fullstack-vite-preset';
 
