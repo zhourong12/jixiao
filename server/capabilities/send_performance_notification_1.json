@@ -1,0 +1,81 @@
+{
+  "id": "send_performance_notification_1",
+  "pluginKey": "@official-plugins/send-feishu-message",
+  "pluginVersion": "1.0.27",
+  "name": "绩效通知批量发送",
+  "description": "批量发送飞书绩效通知给指定用户，支持自定义通知内容和标题",
+  "icon": "",
+  "paramsSchema": {
+    "type": "object",
+    "properties": {
+      "notification_title": {
+        "description": "绩效通知标题",
+        "type": "string"
+      },
+      "notification_content": {
+        "type": "string",
+        "description": "绩效通知内容，支持Markdown格式"
+      },
+      "receiver_user_ids": {
+        "type": "array",
+        "description": "接收绩效通知的用户ID列表",
+        "items": {
+          "description": "单个用户ID",
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "notification_title",
+      "notification_content",
+      "receiver_user_ids"
+    ],
+    "order": [
+      "notification_title",
+      "notification_content",
+      "receiver_user_ids"
+    ]
+  },
+  "formValue": {
+    "receiverUserList": [
+      "1859243965423659"
+    ],
+    "sender": "bot",
+    "buttons": [],
+    "title": {
+      "2": "i",
+      "4": "p",
+      "9": "o",
+      "24": "l",
+      "3": "n",
+      "16": "t",
+      "22": "i",
+      "13": "i",
+      "5": "u",
+      "7": ".",
+      "10": "t",
+      "21": "t",
+      "title": "测试",
+      "1": "{",
+      "19": "n",
+      "6": "t",
+      "11": "i",
+      "17": "i",
+      "26": "}",
+      "0": "{",
+      "8": "n",
+      "12": "f",
+      "23": "t",
+      "27": "}",
+      "14": "c",
+      "15": "a",
+      "20": "_",
+      "18": "o",
+      "25": "e"
+    },
+    "content": "测试"
+  },
+  "createdAt": 1778292001999,
+  "updatedAt": 1778312475337,
+  "createdBy": 7351627042171584514
+}

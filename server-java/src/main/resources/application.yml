@@ -1,0 +1,20 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: jixiao2-server-java
+  datasource:
+    url: ${JIXIAO2_JDBC_URL:jdbc:mysql://127.0.0.1:3306/jixiao2?characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true}
+    username: ${JIXIAO2_JDBC_USER:root}
+    password: ${JIXIAO2_JDBC_PASSWORD:}
+
+jixiao2:
+  session:
+    secret: ${SESSION_JWT_SECRET:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
