@@ -118,6 +118,15 @@
 - 移动端单列展示，增大点击热区，确保可操作性
 - 表格在移动端允许横向滚动
 
+### 5.3 列表与分页（后台列表页统一）
+
+后台数据列表（含筛选区 + 表格 + 分页）统一采用以下结构，与业务参考页一致：
+
+- **筛选区**：置于 `ui-card` 内；标签用 `ui-label`，控件用 `ui-input` / `ui-select`；底部操作区右对齐或左对齐均可，主操作 `ui-btn-primary`（查询），次操作 `ui-btn-outline`（重置），导出等扩展操作用 `ui-btn-outline`。
+- **列表区**：外层 `ui-list-panel`；表头 `ui-table` + `ui-table-wrap`（仅横向分隔线，无竖线）；行高 `py-4`，表头 `py-3.5`；空态 `ui-empty`，加载 `ui-loading`。
+- **分页**：统一 `client-vue/src/components/ui/ListPagination.vue`（`v-model:page` / `v-model:page-size`）；文案「第 x-y 条 / 总共 n 条」；页码 + 上一页/下一页；每页条数下拉「n 条/页」；分页条在列表卡片底部右对齐，左侧为范围文案。
+- **操作列**：行内操作用 `ui-btn-ghost ui-btn-sm` 或链接式按钮，避免小复选框。
+
 ## 6. Visual Language (视觉语言)
 
 **形态特征**：
@@ -157,29 +166,33 @@
 
 ## 数据库：菜单与权限（RBAC）
 
-菜单数据在表 `menu`（`menu_key`, `name`, `sort_order`），授权在 `role_menu`（`role_key`, `menu_key`, `allowed`）。代码侧权威列表为 `shared/api.interface.ts` 中的 `MenuPermissionKey` / `MENU_PERMISSION_KEYS`。
+菜单数据在表 `menu`（`menu_key`, `name`, `sort_order`），授权在 `role_menu`（`role_key`, `menu_key`, `allowed`）。代码侧权威列表为 `client-vue/src/types/api.interface.ts` 中的 `MenuPermissionKey` / `MENU_PERMISSION_KEYS`。
 
 ### 新增或修改菜单时（必须同步）
 
 1. 在 `MenuPermissionKey` 与 `MENU_PERMISSION_KEYS` 中增加或调整 key。
-2. 侧栏 `client/src/components/Layout.tsx` 的 `navItems`（若有独立路由）。
-3. `client/src/pages/admin/PermissionManagePage/PermissionManagePage.tsx` 的 `MENU_LABELS`（权限矩阵展示名）。
-4. **SQL**：在 `server/database/sql/initial.sql` 的 `INSERT INTO menu` 段落写入同一批定义（新建库用）。
-5. **SQL**：在 `server/database/sql/sync-menu-table.sql` 中追加/修改对应行（已有库可重复执行，会更新 `name`/`sort_order`，并用 `INSERT IGNORE` 为各角色补全缺失的 `role_menu`）。
+2. 侧栏 `client-vue/src/layouts/AppLayout.vue` 的 `navItems`（若有独立路由）。
+3. `client-vue/src/views/admin/PermissionManageView.vue` 的 `MENU_LABELS`（权限矩阵展示名）。
+4. **SQL**：在 `server-java/database/sql/initial.sql` 的 `INSERT INTO menu` 段落写入同一批定义（新建库用）。
+5. **SQL**：在 `server-java/database/sql/sync-menu-table.sql` 中追加/修改对应行（已有库可重复执行，会更新 `name`/`sort_order`，并用 `INSERT IGNORE` 为各角色补全缺失的 `role_menu`）。
 
 ### 已有库 `menu` / `role_menu` 为空或不完整时
 
 在数据库中执行：
 
-`server/database/sql/sync-menu-table.sql`
+`server-java/database/sql/sync-menu-table.sql`
 
 该脚本会： upsert 全部菜单行；为 `super_admin` / `admin` / `employee` 插入尚未存在的 `role_menu` 记录（不覆盖你已手动改过的开关）。
 
 ### HTTP API 变更时（必须同步清单与 Newman）
 
-修改、新增或删除对外 HTTP 接口（`server/modules/**/*.controller.ts` 及相关的 `shared/api.interface.ts`）时，须同步：
+修改、新增或删除对外 HTTP 接口（`server-java` 控制器及相关的 `client-vue/src/types/api.interface.ts`）时，须同步：
 
 - `scripts/newman/api-inventory.md`
 - `scripts/newman/build-collection.mjs`，并执行 `npm run newman:build` 生成 `scripts/newman/jixiao2-api.postman_collection.json`
 
 细则与例外见 **`.cursor/rules/api-newman-sync.mdc`**（编辑上述文件时 Cursor 会附带该规则）。
+
+## 本地开发：后端改动须重启
+
+修改 `server-java`（含 `.java`、`pom.xml`、`application.yml` 等）后，正在运行的 `spring-boot:run` **不会**自动加载新代码或新依赖；须在验证前 **重启后端**（或整条 `npm run dev`）。完整约定与端口说明见 **`.cursor/rules/dev-local-services.mdc`**。

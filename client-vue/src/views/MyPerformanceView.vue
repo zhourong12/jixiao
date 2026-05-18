@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import type { PerformanceListItem } from "@/types/api.interface";
+import type { PerformanceListItem, PerformanceStatus } from "@/types/api.interface";
 import { listPerformances } from "@/api/performances";
-import { PERFORMANCE_STATUS_LABELS } from "@/constants/performanceStatus";
+import PerformanceStatusBadge from "@/components/ui/PerformanceStatusBadge.vue";
+import { formatPeriodDisplay } from "@/utils/period";
 import { useSessionStore } from "@/stores/session";
 
 const session = useSessionStore();
@@ -29,29 +30,47 @@ async function load() {
   }
 }
 
+function actionText(status: PerformanceStatus): string {
+  switch (status) {
+    case "goal_setting":
+      return "去设定目标";
+    case "goal_rejected":
+      return "去修改目标";
+    case "self_review":
+      return "去自评";
+    case "completed":
+      return "查看详情";
+    default:
+      return "查看进度";
+  }
+}
+
 onMounted(() => void load());
 watch(myUserId, () => void load());
 </script>
 
 <template>
-  <div class="space-y-4">
-    <h1 class="text-2xl font-bold text-foreground">????</h1>
-    <div v-if="loading" class="py-16 text-center text-muted-foreground">????</div>
-    <ul v-else class="space-y-2">
+  <div class="ui-page">
+    <p class="ui-page-intro">查看和管理您的绩效考核</p>
+    <div v-if="loading" class="ui-loading">加载中...</div>
+    <ul v-else class="space-y-3">
       <li
         v-for="r in records"
         :key="r.id"
-        class="flex cursor-pointer items-center justify-between rounded-md border border-border bg-card p-4 shadow-sm hover:bg-accent"
+        class="ui-card-compact flex cursor-pointer items-center justify-between transition-colors hover:bg-accent"
         @click="router.push(`/performances/${r.id}`)"
       >
-        <div>
-          <p class="font-medium">{{ r.period }}</p>
-          <p class="text-xs text-muted-foreground">{{ PERFORMANCE_STATUS_LABELS[r.status] || r.status }}</p>
+        <div class="min-w-0">
+          <p class="truncate font-medium text-foreground">{{ formatPeriodDisplay(r.period) }}</p>
+          <div class="mt-2">
+            <PerformanceStatusBadge :status="r.status" />
+          </div>
         </div>
-        <span class="text-primary">?? ?</span>
+        <span class="shrink-0 text-sm text-primary">{{ actionText(r.status) }} →</span>
       </li>
-      <li v-if="records.length === 0" class="py-10 text-center text-sm text-muted-foreground">
-        ?????????????
+      <li v-if="records.length === 0" class="ui-empty">
+        <p>暂无绩效记录</p>
+        <p class="mt-1 text-xs">请联系管理员为您创建绩效考核</p>
       </li>
     </ul>
   </div>

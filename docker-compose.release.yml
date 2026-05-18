@@ -1,0 +1,27 @@
+services:
+  jixiao2-api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    environment:
+      JIXIAO2_JDBC_URL: ${JIXIAO2_JDBC_URL:?set JIXIAO2_JDBC_URL}
+      JIXIAO2_JDBC_USER: ${JIXIAO2_JDBC_USER:?set JIXIAO2_JDBC_USER}
+      JIXIAO2_JDBC_PASSWORD: ${JIXIAO2_JDBC_PASSWORD:?set JIXIAO2_JDBC_PASSWORD}
+      SESSION_JWT_SECRET: ${SESSION_JWT_SECRET:?set SESSION_JWT_SECRET}
+      JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS: ${JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS:-http://localhost:*,http://127.0.0.1:*}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI:-}
+    ports:
+      - "8081:8081"
+
+  jixiao2-web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      - jixiao2-api
+    ports:
+      - "80:80"

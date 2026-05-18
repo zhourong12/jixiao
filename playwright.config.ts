@@ -1,9 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
+const baseURL = process.env.E2E_BASE_URL || 'http://localhost:5174';
+
 export default defineConfig({
-  testDir: './test/playwright',
+  testDir: 'test/playwright',
   timeout: 60_000,
+  retries: 0,
   use: {
-    baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:8080',
+    baseURL,
+    trace: 'off',
   },
 });

@@ -33,9 +33,6 @@ public class SessionAuthInterceptor implements HandlerInterceptor {
     if ("POST".equals(method) && "/api/session/logout".equals(uri)) {
       return true;
     }
-    if ("GET".equals(method) && "/api/admin/notifications".equals(uri)) {
-      return true;
-    }
     if ("GET".equals(method) && uri.startsWith("/api/admin/templates")) {
       return true;
     }

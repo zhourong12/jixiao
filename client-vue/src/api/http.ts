@@ -33,5 +33,17 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
         : res.statusText;
     throw new Error(msg || `HTTP ${res.status}`);
   }
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    "success" in data &&
+    (data as { success: unknown }).success === false
+  ) {
+    const msg =
+      "message" in data && (data as { message: unknown }).message
+        ? String((data as { message: unknown }).message)
+        : "请求失败";
+    throw new Error(msg);
+  }
   return data as T;
 }

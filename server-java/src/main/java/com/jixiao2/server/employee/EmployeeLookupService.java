@@ -47,10 +47,36 @@ public class EmployeeLookupService {
       throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户不存在");
     }
     if (byName.size() > 1) {
+      List<EmployeeRow> privileged = new java.util.ArrayList<EmployeeRow>();
+      for (EmployeeRow row : byName) {
+        if (hasLocalAccount(row.getEmployeeId())) {
+          privileged.add(row);
+        }
+      }
+      if (privileged.size() == 1) {
+        return privileged.get(0);
+      }
       throw new ResponseStatusException(
-          HttpStatus.BAD_REQUEST, "存在重名员工，请使用员工编号（employee_id）登录");
+          HttpStatus.BAD_REQUEST, "存在重名员工，请使用员工编号登录");
     }
     return byName.get(0);
+  }
+
+  private boolean hasLocalAccount(String employeeId) {
+    Integer adminCount =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM admin_config WHERE user_id = ?",
+            Integer.class,
+            employeeId);
+    if (adminCount != null && adminCount > 0) {
+      return true;
+    }
+    Integer roleCount =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM user_role WHERE user_id = ?",
+            Integer.class,
+            employeeId);
+    return roleCount != null && roleCount > 0;
   }
 
   public String displayName(EmployeeRow row, String fallbackUsername) {

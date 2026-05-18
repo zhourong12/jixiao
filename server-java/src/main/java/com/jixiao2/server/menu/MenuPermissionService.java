@@ -98,6 +98,15 @@ public class MenuPermissionService {
     }
   }
 
+  /** 是否具备某菜单权限（不抛错） */
+  public boolean isMenuAllowed(String userId, String menuKey) {
+    if (userId == null || userId.isEmpty()) {
+      return false;
+    }
+    MenuPermissionsMe perm = getEffectiveMenusForUser(userId);
+    return Boolean.TRUE.equals(perm.getMenus().get(menuKey));
+  }
+
   public void assertSuperAdmin(String role) {
     assertSuperAdmin(role, "仅超级管理员可配置菜单权限");
   }
@@ -113,6 +122,24 @@ public class MenuPermissionService {
     if (!"admin".equals(role) && !"super_admin".equals(role)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅管理员可设置员工系统角色");
     }
+  }
+
+  /** JSON / 反序列化可能对布尔给出不同表示，统一为是否放行。 */
+  private static boolean toAllowedFlag(Object v) {
+    if (v == null) {
+      return false;
+    }
+    if (Boolean.TRUE.equals(v)) {
+      return true;
+    }
+    if (Boolean.FALSE.equals(v)) {
+      return false;
+    }
+    if (v instanceof Number) {
+      return ((Number) v).intValue() != 0;
+    }
+    String s = String.valueOf(v).trim();
+    return "true".equalsIgnoreCase(s) || "1".equals(s);
   }
 
   public Map<String, Object> getMatrix(String requesterId) {
@@ -174,6 +201,9 @@ public class MenuPermissionService {
             rs -> {
               String rk = rs.getString("role_key");
               String mk = rs.getString("menu_key");
+              if (mk != null) {
+                mk = mk.trim();
+              }
               int allowed = rs.getInt("allowed");
               if (!matrix.containsKey(rk) || !MenuKeys.ALL.contains(mk)) {
                 return;
@@ -191,7 +221,7 @@ public class MenuPermissionService {
 
   public void updateRoleMenus(String requesterId, Map<String, Object> body) {
     assertSuperAdmin(getUserRole(requesterId));
-    String role = body.get("role") == null ? "" : String.valueOf(body.get("role"));
+    String role = body.get("role") == null ? "" : String.valueOf(body.get("role")).trim();
     if ("super_admin".equals(role)) {
       return;
     }
@@ -206,17 +236,24 @@ public class MenuPermissionService {
     @SuppressWarnings("unchecked")
     Map<String, Object> menus = (Map<String, Object>) body.get("menus");
     if (menus == null) {
-      return;
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体缺少 menus");
     }
     List<String> superOnly =
         java.util.Arrays.asList(
             "performance_export", "performance_batch_create", "admin_performance_calibration");
     for (Map.Entry<String, Object> e : menus.entrySet()) {
-      String menuKey = e.getKey();
-      if (!MenuKeys.ALL.contains(menuKey)) {
+      String menuKey = e.getKey() == null ? "" : String.valueOf(e.getKey()).trim();
+      if (menuKey.isEmpty()) {
         continue;
       }
-      boolean allowed = Boolean.TRUE.equals(e.getValue());
+      if (!MenuKeys.ALL.contains(menuKey)) {
+        throw new ResponseStatusException(
+            HttpStatus.BAD_REQUEST,
+            "未知菜单项: "
+                + menuKey
+                + "。请确认后端已包含该 menu_key（与 MenuKeys.ALL / sync-menu-table.sql 一致），并重新部署。");
+      }
+      boolean allowed = toAllowedFlag(e.getValue());
       if (superOnly.contains(menuKey)) {
         if (allowed) {
           throw new ResponseStatusException(

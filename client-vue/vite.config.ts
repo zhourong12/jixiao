@@ -20,10 +20,21 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      host: true,
       port: Number(process.env.CLIENT_DEV_PORT) || 5174,
       proxy: {
         "/auth": { target, changeOrigin: true },
         "/api": { target, changeOrigin: true },
+        "/actuator": { target, changeOrigin: true },
+      },
+    },
+    preview: {
+      host: true,
+      port: Number(process.env.CLIENT_PREVIEW_PORT) || 5174,
+      proxy: {
+        "/auth": { target, changeOrigin: true },
+        "/api": { target, changeOrigin: true },
+        "/actuator": { target, changeOrigin: true },
       },
     },
     build: {

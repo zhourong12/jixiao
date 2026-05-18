@@ -1,0 +1,2 @@
+-- 已合并到 add-evaluation.sql（评选周期、奖项、获奖记录）。请执行：
+--   mysql ... < server/database/sql/add-evaluation.sql

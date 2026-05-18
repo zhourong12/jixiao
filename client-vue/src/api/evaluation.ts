@@ -5,6 +5,7 @@ import type {
   EvaluationPeriodItem,
   EvaluationPeriodType,
   PerformanceLeaderboardResponse,
+  QuarterLeaderboardDetailResponse,
   PeriodAwardItem,
   UpdateEvaluationPeriodRequest,
 } from "@/types/api.interface";
@@ -48,12 +49,12 @@ export async function getPerformancePeriods(): Promise<{ items: string[] }> {
 
 export async function getEvaluationLeaderboard(params: {
   scope: "month" | "quarter";
-  key: string;
+  key?: string;
   departmentIds?: string[];
 }): Promise<PerformanceLeaderboardResponse> {
   const search = new URLSearchParams();
   search.set("scope", params.scope);
-  search.set("key", params.key);
+  if (params.key?.trim()) search.set("key", params.key.trim());
   if (params.departmentIds?.length) {
     search.set("departmentIds", params.departmentIds.join(","));
   }
@@ -62,9 +63,28 @@ export async function getEvaluationLeaderboard(params: {
   });
 }
 
-export async function getPeriodAwards(periodId: string): Promise<{ items: PeriodAwardItem[] }> {
-  const q = new URLSearchParams({ periodId });
-  return apiJson<{ items: PeriodAwardItem[] }>(`/api/admin/evaluation/awards?${q.toString()}`, { method: "GET" });
+export async function getEvaluationLeaderboardQuarterDetail(params: {
+  key: string;
+  employeeId: string;
+}): Promise<QuarterLeaderboardDetailResponse> {
+  const search = new URLSearchParams();
+  search.set("key", params.key);
+  search.set("employeeId", params.employeeId);
+  return apiJson<QuarterLeaderboardDetailResponse>(
+    `/api/admin/evaluation/leaderboard/quarter-detail?${search.toString()}`,
+    { method: "GET" },
+  );
+}
+
+export async function getPeriodAwards(params: {
+  periodId?: string;
+  periodType?: EvaluationPeriodType;
+}): Promise<{ items: PeriodAwardItem[] }> {
+  const q = new URLSearchParams();
+  if (params.periodId?.trim()) q.set("periodId", params.periodId.trim());
+  if (params.periodType) q.set("periodType", params.periodType);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiJson<{ items: PeriodAwardItem[] }>(`/api/admin/evaluation/awards${suffix}`, { method: "GET" });
 }
 
 export async function createPeriodAward(body: CreatePeriodAwardRequest): Promise<PeriodAwardItem> {

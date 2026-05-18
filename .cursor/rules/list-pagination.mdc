@@ -1,0 +1,16 @@
+---
+description: 后台列表与分页须与 AGENTS.md 5.3 及 ListPagination 组件一致
+globs:
+  - client-vue/src/views/**/*.{vue,ts}
+  - client-vue/src/components/ui/ListPagination.vue
+  - client-vue/src/styles/main.css
+---
+
+# 列表与分页
+
+编辑后台列表页或分页样式时：
+
+1. 对照 `AGENTS.md` **5.3 列表与分页**。
+2. 分页使用 `ListPagination`，勿手写「上一页/下一页」。
+3. 表格使用 `ui-list-panel` + `ui-table` / `ui-table-wrap`。
+4. 筛选区使用 `ui-card` + `ui-label` + `ui-input` / `ui-select` + `ui-btn-primary` / `ui-btn-outline`。

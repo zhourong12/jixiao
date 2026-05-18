@@ -32,8 +32,11 @@ public class EmployeeController {
   public Map<String, Object> list(
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "20") int pageSize,
-      @RequestParam(required = false) String keyword) {
-    Map<String, Object> data = employeeService.getAllHierarchies(page, pageSize, keyword);
+      @RequestParam(required = false) String keyword,
+      @RequestParam(required = false) String subjectCode,
+      @RequestParam(required = false) String departmentId) {
+    Map<String, Object> data =
+        employeeService.getAllHierarchies(page, pageSize, keyword, subjectCode, departmentId);
     @SuppressWarnings("unchecked")
     List<Map<String, Object>> hierarchies = (List<Map<String, Object>>) data.get("items");
     List<Map<String, Object>> items = mapEmployeeItems(hierarchies);
@@ -86,9 +89,16 @@ public class EmployeeController {
   }
 
   @GetMapping("/department-options")
-  public Map<String, Object> departmentOptions() {
+  public Map<String, Object> departmentOptions(@RequestParam(required = false) String subjectCode) {
     Map<String, Object> out = new LinkedHashMap<String, Object>();
-    out.put("items", employeeService.listDepartmentOptions());
+    out.put("items", employeeService.listDepartmentOptions(subjectCode));
+    return out;
+  }
+
+  @GetMapping("/department-tree")
+  public Map<String, Object> departmentTree() {
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("items", employeeService.listDepartmentTree());
     return out;
   }
 
@@ -100,8 +110,8 @@ public class EmployeeController {
   }
 
   @GetMapping("/all")
-  public Map<String, Object> all() {
-    Map<String, Object> data = employeeService.getAllHierarchies(1, 10000, null);
+  public Map<String, Object> all(@RequestParam(required = false) String subjectCode) {
+    Map<String, Object> data = employeeService.getAllHierarchies(1, 10000, null, subjectCode);
     @SuppressWarnings("unchecked")
     List<Map<String, Object>> hierarchies = (List<Map<String, Object>>) data.get("items");
     Map<String, Object> out = new LinkedHashMap<String, Object>();
@@ -110,10 +120,17 @@ public class EmployeeController {
   }
 
   @PostMapping("/sync-from-lark")
-  public Map<String, Object> syncFromLark(@RequestBody Map<String, Object> body) {
+  public Map<String, Object> syncFromLark(
+      @CurrentUser String userId, @RequestBody Map<String, Object> body) {
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
     boolean clearExisting = Boolean.TRUE.equals(body.get("clearExisting"));
+    Object sc = body.get("subjectCode");
+    if (sc == null || String.valueOf(sc).trim().isEmpty()) {
+      sc = body.get("feishuSubjectCode");
+    }
+    String subjectCode = sc == null ? "" : String.valueOf(sc).trim();
     try {
-      Map<String, Object> result = employeeService.syncFromLark(clearExisting);
+      Map<String, Object> result = employeeService.syncFromLark(subjectCode, clearExisting);
       Map<String, Object> out = new LinkedHashMap<String, Object>();
       out.put("success", Boolean.TRUE);
       out.put("syncedCount", result.get("count"));
@@ -130,6 +147,49 @@ public class EmployeeController {
     }
   }
 
+  @GetMapping("/feishu-user-options")
+  public Map<String, Object> feishuUserOptions(
+      @CurrentUser String userId,
+      @RequestParam String subjectCode) {
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
+    return employeeService.listFeishuUserOptions(subjectCode);
+  }
+
+  @GetMapping("/feishu-user-profile")
+  public Map<String, Object> feishuUserProfile(
+      @CurrentUser String userId, @RequestParam String subjectCode, @RequestParam String openId) {
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
+    return employeeService.fetchFeishuUserProfile(subjectCode, openId);
+  }
+
+  @GetMapping("/calibration-assignees")
+  public Map<String, Object> calibrationAssigneesGet(@CurrentUser String userId) {
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("items", employeeService.listCalibrationAssigneesWithNames());
+    return out;
+  }
+
+  @PutMapping("/calibration-assignees")
+  public Map<String, Boolean> calibrationAssigneesPut(
+      @CurrentUser String userId, @RequestBody Map<String, Object> body) {
+    Object raw = body == null ? null : body.get("employeeIds");
+    List<String> ids = new ArrayList<String>();
+    if (raw instanceof List) {
+      for (Object o : (List<?>) raw) {
+        if (o == null) {
+          continue;
+        }
+        String t = String.valueOf(o).trim();
+        if (!t.isEmpty()) {
+          ids.add(t);
+        }
+      }
+    }
+    employeeService.setCalibrationAssigneeEmployeeIds(userId, ids);
+    return singleSuccess();
+  }
+
   private static List<Map<String, Object>> mapEmployeeItems(List<Map<String, Object>> hierarchies) {
     List<Map<String, Object>> employeeItems = new ArrayList<Map<String, Object>>();
     for (Map<String, Object> h : hierarchies) {
@@ -144,6 +204,7 @@ public class EmployeeController {
       item.put("position", h.get("position"));
       item.put("workLocation", h.get("workLocation"));
       item.put("joinDate", h.get("joinDate"));
+      item.put("departmentId", h.get("departmentId"));
       item.put("departmentName", h.get("departmentName"));
       item.put("managerId", h.get("managerId"));
       item.put("managerName", h.get("managerName"));
@@ -151,6 +212,12 @@ public class EmployeeController {
       item.put("dottedManagerName", h.get("dottedManagerName"));
       item.put("roleKey", h.get("roleKey"));
       item.put("roleName", h.get("roleName"));
+      item.put("feishuSubjectId", h.get("feishuSubjectId"));
+      item.put("feishuOpenId", h.get("feishuOpenId"));
+      item.put("feishuSubjectCode", h.get("feishuSubjectCode"));
+      item.put("feishuSubjectName", h.get("feishuSubjectName"));
+      item.put("assessmentRuleId", h.get("assessmentRuleId"));
+      item.put("assessmentRuleName", h.get("assessmentRuleName"));
       employeeItems.add(item);
     }
     return employeeItems;

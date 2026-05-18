@@ -1,23 +1,65 @@
 import type {
   CreateEmployeeRequest,
+  EmployeeDirectoryListItem,
   EmployeeListResponse,
   EmployeeRoleOption,
+  PerformanceCalibrationAssignee,
   DepartmentOption,
+  DepartmentTreeSubject,
+  FeishuSubjectOption,
+  FeishuUserProfileResponse,
+  FeishuUserOptionsResponse,
   SyncEmployeesResponse,
   UpdateEmployeeHierarchyRequest,
   UpdateEmployeeRequest,
 } from "@/types/api.interface";
 import { apiJson } from "./http";
 
+export function subjectCodeQueryValue(code: unknown): string | undefined {
+  if (code == null) return undefined;
+  const t = String(code).trim();
+  return t || undefined;
+}
+
+export async function getAllEmployees(params?: { subjectCode?: string }): Promise<{
+  items: EmployeeDirectoryListItem[];
+}> {
+  const q = new URLSearchParams();
+  const sc = subjectCodeQueryValue(params?.subjectCode);
+  if (sc) q.set("subjectCode", sc);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiJson<{ items: EmployeeDirectoryListItem[] }>(`/api/employees/all${suffix}`, {
+    method: "GET",
+  });
+}
+
+export async function getCalibrationAssignees(): Promise<{ items: PerformanceCalibrationAssignee[] }> {
+  return apiJson<{ items: PerformanceCalibrationAssignee[] }>("/api/employees/calibration-assignees", {
+    method: "GET",
+  });
+}
+
+export async function setCalibrationAssignees(body: { employeeIds: string[] }): Promise<{ success: boolean }> {
+  return apiJson<{ success: boolean }>("/api/employees/calibration-assignees", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function getEmployees(params: {
   page?: number;
   pageSize?: number;
   keyword?: string;
+  subjectCode?: string;
+  departmentId?: string;
 }): Promise<EmployeeListResponse> {
   const q = new URLSearchParams();
   if (params.page != null) q.set("page", String(params.page));
   if (params.pageSize != null) q.set("pageSize", String(params.pageSize));
   if (params.keyword) q.set("keyword", params.keyword);
+  const sc = subjectCodeQueryValue(params.subjectCode);
+  if (sc) q.set("subjectCode", sc);
+  if (params.departmentId) q.set("departmentId", params.departmentId);
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return apiJson<EmployeeListResponse>(`/api/employees${suffix}`, { method: "GET" });
 }
@@ -54,15 +96,61 @@ export async function deleteEmployee(employeeId: string): Promise<{ success: boo
   return apiJson<{ success: boolean }>(`/api/employees/${encodeURIComponent(employeeId)}`, { method: "DELETE" });
 }
 
-export async function getDepartmentOptions(): Promise<{ items: DepartmentOption[] }> {
-  return apiJson<{ items: DepartmentOption[] }>("/api/employees/department-options", { method: "GET" });
+export async function getDepartmentTree(): Promise<{ items: DepartmentTreeSubject[] }> {
+  return apiJson<{ items: DepartmentTreeSubject[] }>("/api/employees/department-tree", {
+    method: "GET",
+  });
 }
 
-export async function syncEmployeesFromLark(clearExisting: boolean): Promise<SyncEmployeesResponse> {
+export async function getDepartmentOptions(params?: {
+  subjectCode?: string;
+}): Promise<{ items: DepartmentOption[] }> {
+  const q = new URLSearchParams();
+  const sc = subjectCodeQueryValue(params?.subjectCode);
+  if (sc) q.set("subjectCode", sc);
+  const qs = q.toString();
+  return apiJson<{ items: DepartmentOption[] }>(
+    qs ? `/api/employees/department-options?${qs}` : "/api/employees/department-options",
+    { method: "GET" },
+  );
+}
+
+export async function getFeishuLoginSubjects(): Promise<{
+  items: FeishuSubjectOption[];
+  passwordLoginEnabled?: boolean;
+}> {
+  return apiJson<{ items: FeishuSubjectOption[]; passwordLoginEnabled?: boolean }>("/auth/feishu/subjects", {
+    method: "GET",
+  });
+}
+
+export async function getFeishuUserOptions(params: {
+  subjectCode: string;
+}): Promise<FeishuUserOptionsResponse> {
+  const q = new URLSearchParams();
+  q.set("subjectCode", params.subjectCode);
+  return apiJson<FeishuUserOptionsResponse>(`/api/employees/feishu-user-options?${q.toString()}`, {
+    method: "GET",
+  });
+}
+
+export async function getFeishuUserProfile(params: {
+  subjectCode: string;
+  openId: string;
+}): Promise<FeishuUserProfileResponse> {
+  const q = new URLSearchParams();
+  q.set("subjectCode", params.subjectCode);
+  q.set("openId", params.openId);
+  return apiJson<FeishuUserProfileResponse>(`/api/employees/feishu-user-profile?${q.toString()}`, {
+    method: "GET",
+  });
+}
+
+export async function syncEmployeesFromLark(subjectCode: string, clearExisting: boolean): Promise<SyncEmployeesResponse> {
   try {
     const data = await apiJson<SyncEmployeesResponse>("/api/employees/sync-from-lark", {
       method: "POST",
-      body: JSON.stringify({ clearExisting }),
+      body: JSON.stringify({ clearExisting, subjectCode }),
     });
     if (!data || typeof data.success !== "boolean") {
       return { success: false, syncedCount: 0, message: "同步返回无效数据，请稍后重试" };

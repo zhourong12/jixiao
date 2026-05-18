@@ -10,6 +10,7 @@ public class Jixiao2Properties {
 
   private final Cors cors = new Cors();
   private final Session session = new Session();
+  private final Auth auth = new Auth();
   private final Feishu feishu = new Feishu();
 
   public Cors getCors() {
@@ -18,6 +19,10 @@ public class Jixiao2Properties {
 
   public Session getSession() {
     return session;
+  }
+
+  public Auth getAuth() {
+    return auth;
   }
 
   public Feishu getFeishu() {
@@ -115,10 +120,40 @@ public class Jixiao2Properties {
     }
   }
 
+  public static class Auth {
+    /** 是否允许账密登录；false 时仅飞书 OAuth */
+    private boolean passwordLoginEnabled = true;
+
+    public boolean isPasswordLoginEnabled() {
+      return passwordLoginEnabled;
+    }
+
+    public void setPasswordLoginEnabled(boolean passwordLoginEnabled) {
+      this.passwordLoginEnabled = passwordLoginEnabled;
+    }
+  }
+
   public static class Feishu {
     private String appId = "";
     private String appSecret = "";
     private String redirectUri = "";
+    /** 绩效飞书通知文末可选入口（浏览器打开的站点），如 https://app.example.com */
+    private String notifyFrontendBaseUrl = "";
+    /**
+     * 飞书网页应用首页/入口（开放平台「网页应用」托管或 applink 等）。若配置则卡片 {@code card_link} 与文末链接优先用此地址。
+     */
+    private String notifyFeishuWebAppUrl = "";
+    /** 是否在绩效流转时自动发飞书私聊；false 时仅保留手工通知管理 */
+    private boolean performanceNotifyEnabled = true;
+    /**
+     * 绩效卡片「打开网页应用」走 AppLink 时使用的应用 ID（一般为「网页应用」独立应用，与登录/OAuth/发 IM 的 {@link
+     * #appId} 可不同）。未配置时回退为 {@link #appId}。
+     */
+    private String webAppLinkAppId = "";
+    /**
+     * 与 {@link #webAppLinkAppId} 配套的 App Secret；当前仅作配置占位（发 IM 仍用主应用 {@link #appSecret}），便于与开放平台凭证一致管理。
+     */
+    private String webAppLinkAppSecret = "";
 
     public String getAppId() {
       return appId;
@@ -142,6 +177,46 @@ public class Jixiao2Properties {
 
     public void setRedirectUri(String redirectUri) {
       this.redirectUri = redirectUri;
+    }
+
+    public String getNotifyFrontendBaseUrl() {
+      return notifyFrontendBaseUrl;
+    }
+
+    public void setNotifyFrontendBaseUrl(String notifyFrontendBaseUrl) {
+      this.notifyFrontendBaseUrl = notifyFrontendBaseUrl;
+    }
+
+    public String getNotifyFeishuWebAppUrl() {
+      return notifyFeishuWebAppUrl;
+    }
+
+    public void setNotifyFeishuWebAppUrl(String notifyFeishuWebAppUrl) {
+      this.notifyFeishuWebAppUrl = notifyFeishuWebAppUrl;
+    }
+
+    public boolean isPerformanceNotifyEnabled() {
+      return performanceNotifyEnabled;
+    }
+
+    public void setPerformanceNotifyEnabled(boolean performanceNotifyEnabled) {
+      this.performanceNotifyEnabled = performanceNotifyEnabled;
+    }
+
+    public String getWebAppLinkAppId() {
+      return webAppLinkAppId;
+    }
+
+    public void setWebAppLinkAppId(String webAppLinkAppId) {
+      this.webAppLinkAppId = webAppLinkAppId;
+    }
+
+    public String getWebAppLinkAppSecret() {
+      return webAppLinkAppSecret;
+    }
+
+    public void setWebAppLinkAppSecret(String webAppLinkAppSecret) {
+      this.webAppLinkAppSecret = webAppLinkAppSecret;
     }
   }
 }

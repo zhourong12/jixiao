@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="maven-antrun-" default="main">
+  <target name="main">
+    <mkdir dir="D:\zr\code\jixiao2\server-java/../dist/server" />
+    <copy file="D:\zr\code\jixiao2\server-java\target/server-0.0.1-SNAPSHOT.jar" tofile="D:\zr\code\jixiao2\server-java/../dist/server/server-0.0.1-SNAPSHOT.jar" overwrite="true" />
+  </target>
+</project>

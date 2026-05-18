@@ -25,19 +25,4 @@ public class HomeController {
     return homeService.getTodos(userId, year, month);
   }
 
-  @GetMapping("/overview")
-  public Map<String, Object> overview(
-      @CurrentUser String userId,
-      @RequestParam(required = false) Integer year,
-      @RequestParam(required = false) Integer month) {
-    return homeService.getOverview(userId, year, month);
-  }
-
-  @GetMapping("/action-counts")
-  public Map<String, Object> actionCounts(
-      @CurrentUser String userId,
-      @RequestParam(required = false) Integer year,
-      @RequestParam(required = false) Integer month) {
-    return homeService.getActionCounts(userId, year, month);
-  }
 }

@@ -23,9 +23,10 @@ public class NotificationController {
 
   @GetMapping
   public Map<String, Object> list(
+      @CurrentUser String userId,
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "20") int pageSize) {
-    return notificationService.list(page, pageSize);
+    return notificationService.list(userId, page, pageSize);
   }
 
   @PostMapping

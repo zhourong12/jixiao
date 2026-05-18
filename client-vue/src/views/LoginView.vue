@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { apiJson } from "@/api/http";
+import { getFeishuLoginSubjects } from "@/api/employees";
+import type { FeishuSubjectOption } from "@/types/api.interface";
+import { passwordLoginEnabledFromEnv } from "@/config/login";
 import { useSessionStore } from "@/stores/session";
 
 const route = useRoute();
@@ -8,83 +12,176 @@ const router = useRouter();
 const session = useSessionStore();
 const username = ref("");
 const password = ref("");
-const error = ref<string | null>(null);
+const error = ref("");
 const loading = ref(false);
+const feishuSubjects = ref<FeishuSubjectOption[]>([]);
+const passwordLoginEnabled = ref(passwordLoginEnabledFromEnv);
 
-function goFeishu() {
-  window.location.href = "/auth/feishu/login";
-}
+const feishuOnly = computed(() => !passwordLoginEnabled.value);
+
+onMounted(() => {
+  const q = route.query.login_error;
+  const msg = typeof q === "string" ? q : Array.isArray(q) && typeof q[0] === "string" ? q[0] : "";
+  if (msg) {
+    try {
+      error.value = decodeURIComponent(msg.replace(/\+/g, " "));
+    } catch {
+      error.value = msg;
+    }
+  }
+  void (async () => {
+    try {
+      const res = await getFeishuLoginSubjects();
+      feishuSubjects.value = res.items || [];
+      if (typeof res.passwordLoginEnabled === "boolean") {
+        passwordLoginEnabled.value = res.passwordLoginEnabled;
+      }
+    } catch {
+      feishuSubjects.value = [];
+    }
+  })();
+});
 
 async function onSubmit() {
-  error.value = null;
+  error.value = "";
   loading.value = true;
   try {
-    const res = await fetch("/auth/password/login", {
+    await apiJson<{ success?: boolean }>("/auth/password/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
       body: JSON.stringify({ username: username.value.trim(), password: password.value }),
     });
-    const data = (await res.json()) as { success?: boolean; message?: string };
-    if (!res.ok || !data.success) {
-      error.value = data.message || "????";
-      return;
-    }
     await session.refreshSession();
     await session.refreshMenuPermissions(true);
-    const redirect = typeof route.query.redirect === "string" ? route.query.redirect : "/";
-    await router.replace(redirect || "/");
-  } catch {
-    error.value = "????";
+    const next = typeof route.query.next === "string" ? route.query.next : "/";
+    await router.replace(next || "/");
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "登录失败";
   } finally {
     loading.value = false;
   }
 }
+
+function goFeishuWithSubject(subjectCode: string) {
+  error.value = "";
+  const code = subjectCode.trim();
+  if (!code) return;
+  const next = typeof route.query.next === "string" ? route.query.next : "/";
+  window.location.href = `/auth/feishu/login?subjectCode=${encodeURIComponent(code)}&next=${encodeURIComponent(next)}`;
+}
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-background p-4">
-    <div class="w-full max-w-md rounded-md border border-border bg-card p-6 shadow-sm">
-      <h1 class="text-xl font-semibold text-foreground">????</h1>
-      <p class="mt-1 text-sm text-muted-foreground">??????????????????????</p>
-      <form class="mt-6 space-y-4" @submit.prevent="onSubmit">
-        <p v-if="error" class="text-sm text-destructive" role="alert">{{ error }}</p>
-        <div>
-          <label class="mb-1 block text-sm font-medium text-foreground" for="u">???</label>
-          <input
-            id="u"
-            v-model="username"
-            autocomplete="username"
-            class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-            placeholder="???????"
-          />
-        </div>
-        <div>
-          <label class="mb-1 block text-sm font-medium text-foreground" for="p">??</label>
-          <input
-            id="p"
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-primary"
-            placeholder="?? 123456"
-          />
-        </div>
-        <button
-          type="submit"
-          class="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          :disabled="loading"
+  <div
+    class="relative flex min-h-screen items-center justify-center overflow-hidden p-6"
+    :class="feishuOnly ? 'bg-[hsl(215_25%_97%)]' : 'bg-background'"
+  >
+    <div
+      v-if="feishuOnly"
+      class="pointer-events-none absolute inset-0 opacity-40"
+      aria-hidden="true"
+      style="
+        background-image: linear-gradient(hsl(214 20% 90% / 0.6) 1px, transparent 1px),
+          linear-gradient(90deg, hsl(214 20% 90% / 0.6) 1px, transparent 1px);
+        background-size: 48px 48px;
+      "
+    />
+
+    <div
+      class="relative w-full shadow-sm"
+      :class="feishuOnly ? 'max-w-md rounded-lg border border-border/60 bg-card p-10' : 'ui-card max-w-lg p-8'"
+    >
+      <div
+        class="flex flex-col items-center text-center"
+        :class="feishuOnly ? '' : 'sm:flex-row sm:items-start sm:text-left sm:gap-4'"
+      >
+        <div
+          class="flex shrink-0 items-center justify-center rounded-full bg-primary/15 font-bold text-primary"
+          :class="feishuOnly ? 'h-16 w-16 text-2xl' : 'h-14 w-14 text-lg'"
+          aria-hidden="true"
         >
-          {{ loading ? "???..." : "??" }}
-        </button>
-        <button
-          type="button"
-          class="w-full rounded-md border border-border px-4 py-2.5 text-sm font-medium hover:bg-accent"
-          @click="goFeishu"
-        >
-          ????
-        </button>
-      </form>
+          绩
+        </div>
+        <div class="min-w-0 flex-1" :class="feishuOnly ? 'mt-6' : ''">
+          <h1 class="text-2xl font-bold leading-tight text-foreground">绩效</h1>
+          <p v-if="!feishuOnly" class="mt-1 text-sm text-muted-foreground">
+            使用员工编号或姓名登录；演示环境默认密码为 123456。
+          </p>
+        </div>
+      </div>
+
+      <template v-if="passwordLoginEnabled">
+        <form class="mt-8 space-y-4" @submit.prevent="onSubmit">
+          <div>
+            <label class="ui-label">员工编号或姓名</label>
+            <input
+              v-model="username"
+              type="text"
+              autocomplete="username"
+              placeholder="如 zhou_rong 或 周荣"
+              class="ui-input"
+              required
+            />
+          </div>
+          <div>
+            <label class="ui-label">密码</label>
+            <input v-model="password" type="password" autocomplete="current-password" class="ui-input" required />
+          </div>
+          <p v-if="error" class="ui-alert-danger">{{ error }}</p>
+          <button type="submit" class="ui-btn-primary w-full" :disabled="loading">
+            {{ loading ? "登录中…" : "登录" }}
+          </button>
+        </form>
+
+        <div class="relative my-8">
+          <div class="absolute inset-0 flex items-center" aria-hidden="true">
+            <div class="w-full border-t border-border" />
+          </div>
+          <div class="relative flex justify-center">
+            <span class="bg-card px-3 text-xs font-medium text-muted-foreground">其他登录方式</span>
+          </div>
+        </div>
+
+        <div v-if="feishuSubjects.length" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            v-for="s in feishuSubjects"
+            :key="s.code"
+            type="button"
+            class="flex min-h-[44px] items-center gap-3 rounded-md border border-border bg-card p-4 text-left transition-colors duration-150 hover:border-primary/40 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            @click="goFeishuWithSubject(s.code)"
+          >
+            <div
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-sm font-semibold text-white"
+              style="background: linear-gradient(135deg, #3370ff 0%, #1e4fc4 100%)"
+            >
+              飞
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-semibold text-foreground">{{ s.name }}</div>
+            </div>
+          </button>
+        </div>
+        <p v-else class="text-center text-xs text-muted-foreground">
+          未配置可登录的飞书主体时无法使用飞书登录，请联系管理员在库中维护 feishu_subject / feishu_app。
+        </p>
+      </template>
+
+      <template v-else>
+        <p v-if="error" class="ui-alert-danger mt-8">{{ error }}</p>
+        <div v-if="feishuSubjects.length" class="mt-10 space-y-3">
+          <button
+            v-for="s in feishuSubjects"
+            :key="s.code"
+            type="button"
+            class="flex min-h-[48px] w-full items-center justify-center rounded-md bg-primary px-4 py-3.5 text-sm font-medium text-primary-foreground shadow-sm transition-opacity duration-150 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            @click="goFeishuWithSubject(s.code)"
+          >
+            飞书账号登录（{{ s.name }}）
+          </button>
+        </div>
+        <p v-else class="mt-10 text-center text-sm text-muted-foreground">
+          未配置可登录的飞书主体，请联系管理员在库中维护 feishu_subject / feishu_app。
+        </p>
+      </template>
     </div>
   </div>
 </template>

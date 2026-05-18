@@ -34,7 +34,7 @@ public class EvaluationOpsController {
   public Map<String, Object> leaderboard(
       @CurrentUser String userId,
       @RequestParam String scope,
-      @RequestParam String key,
+      @RequestParam(required = false) String key,
       @RequestParam(name = "departmentIds", required = false) String departmentIdsRaw) {
     List<String> departmentIds = null;
     if (departmentIdsRaw != null && !departmentIdsRaw.trim().isEmpty()) {
@@ -49,9 +49,18 @@ public class EvaluationOpsController {
     return evaluationService.getLeaderboard(userId, scope, key, departmentIds);
   }
 
+  @GetMapping("/leaderboard/quarter-detail")
+  public Map<String, Object> leaderboardQuarterDetail(
+      @CurrentUser String userId, @RequestParam String key, @RequestParam String employeeId) {
+    return evaluationService.getLeaderboardQuarterDetail(userId, key, employeeId);
+  }
+
   @GetMapping("/awards")
-  public Map<String, Object> listAwards(@CurrentUser String userId, @RequestParam String periodId) {
-    return evaluationService.listPeriodAwards(userId, periodId);
+  public Map<String, Object> listAwards(
+      @CurrentUser String userId,
+      @RequestParam(required = false) String periodId,
+      @RequestParam(required = false) String periodType) {
+    return evaluationService.listPeriodAwards(userId, periodId, periodType);
   }
 
   @PostMapping("/awards")

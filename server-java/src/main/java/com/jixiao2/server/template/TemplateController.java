@@ -25,8 +25,9 @@ public class TemplateController {
   @GetMapping
   public Map<String, Object> list(
       @RequestParam(defaultValue = "1") int page,
-      @RequestParam(defaultValue = "20") int pageSize) {
-    return templateService.list(page, pageSize);
+      @RequestParam(defaultValue = "20") int pageSize,
+      @RequestParam(required = false) String type) {
+    return templateService.list(page, pageSize, type);
   }
 
   @GetMapping("/{id}")

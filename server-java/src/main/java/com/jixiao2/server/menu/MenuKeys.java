@@ -13,21 +13,22 @@ public final class MenuKeys {
       Collections.unmodifiableList(
           Arrays.asList(
               "todo",
-              "home",
               "performance_list",
               "performance_export",
               "performance_list_all",
               "performance_batch_create",
               "performance_review_admin",
               "admin_performance_calibration",
+              "admin_performance_feishu_task",
               "my_performance",
               "admin_templates",
-              "admin_notifications",
+              "admin_assessment_rules",
+              "admin_scoring_schemes",
               "admin_employees",
+              "admin_departments",
               "admin_roles",
               "admin_permissions",
-              "admin_statistics_months",
-              "admin_system_config"));
+              "admin_statistics_months"));
 
   private MenuKeys() {}
 

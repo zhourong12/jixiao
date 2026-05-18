@@ -1,0 +1,61 @@
+---
+description: 本地前后端启动/重启、改动后是否需重启的判断；飞书选人接口约定
+globs:
+  - package.json
+  - scripts/run-server-java.mjs
+  - client-vue/vite.config.ts
+  - client-vue/src/**/*.vue
+  - client-vue/src/**/*.ts
+  - server-java/pom.xml
+  - server-java/src/main/resources/**
+  - server-java/src/main/java/**/*.java
+---
+
+# 本地开发服务（前后端）
+
+## 硬性约定（后端改动必重新）
+
+- **`server-java` 任意会影响运行字节码或类路径的改动**（`.java`、`pom.xml` 依赖、`src/main/resources` 含 `application.yml` 等）后，本地正在跑的进程**仍是旧代码**；需在对话收尾 **重启后端**（或整条 `npm run dev`），用户验证 API/飞书链路前亦然。
+- **「重新」**指：停止占用 **`8081`** 的后端（或整条 dev），再 **`npm run dev:server-java`** / **`npm run dev`**；改 **`pom.xml`** 后依赖需由 Maven 解析，同上 **必先停再起**（等价于完整重启 `spring-boot:run`）。
+- **交付前可选**：跑一次 **`npm run build:server-java`**（或仓库约定的编译命令）确认无编译错误，但 **dev 验证仍以重启进程为准**。
+
+## 端口与入口
+
+- **后端**：`server-java`，默认 **`http://127.0.0.1:8081`**（`server-java/src/main/resources/application.yml` 的 `server.port`）。本地通过仓库根目录 `npm run dev:server-java` 启动（内部为 `scripts/run-server-java.mjs` → `server-java/mvnw spring-boot:run`）；若存在 `server-java/.env`，由脚本读入进程环境变量。
+- **前端**：`client-vue`，开发 **`http://localhost:5174`**（根目录 `npm run dev:client`，环境变量 `CLIENT_DEV_PORT=5174`）；API 经 Vite 代理到后端（见 `client-vue/vite.config.ts`）。
+- **一条命令同时启前后端**：仓库根目录 **`npm run dev`**（`concurrently`：`api` + `client`）。
+
+## Agent 改动后：是否需重启（判断清单）
+
+实现或修改代码后，**根据改动类型决定是否替用户重启本地 dev 进程**（用户明确要求「重启」时必做；否则按下表判断）。
+
+| 改动范围 | 需重启 |
+| -------- | ------ |
+| `server-java` 下 **任意 `.java`**、**`pom.xml`**、`src/main/resources`（含 **`application.yml`**、静态模板等） | **后端**（Java/Spring Boot dev **无可用热重载**；Maven 依赖或资源变更同样需要新进程加载） |
+| **仅** `server-java/database/sql`、文档、与运行进程无关的文件 | **否**（数据库脚本需用户自行执行） |
+| `client-vue` 下 **`.vue` / `.ts` / `.css`**（常规页面与组件） | **前端**（虽常有 Vite HMR，仍以重启 dev 前端为准，避免用户看不到最新改动） |
+| `client-vue/vite.config.ts`、`client-vue/index.html`、**`package.json` / 依赖**、`.env` 中与 Vite/代理相关变量 | **前端** |
+| 根目录 `package.json` 的 **`concurrently` / dev 脚本** | **前后端**（整条 dev 链路） |
+| 用户要验证 **后端 API / 飞书回调 / 定时任务** 等行为，且你刚改了 Java 或 yml | **应重启后端**（或整条 `npm run dev`）再让用户试 |
+| 用户要验证 **纯前端交互**，且仅改了 Vue/TS | **仍应重启前端**（与上表 `client-vue` 行一致） |
+
+**约定**：在对话里已改 **后端 Java 或 `application.yml`** 且用户本地正在跑 dev 时，**主动执行一次后端或全量 `npm run dev` 重启**，避免「代码已改但进程仍是旧 class」。
+
+**约定**：在对话里已改 **`client-vue` 任意源码** 且用户本地正在跑 dev 时，**主动重启前端**（结束 **5174** 后重跑 `npm run dev:client`，或整条 **`npm run dev`**），避免「代码已改但浏览器仍是旧 bundle / HMR 未生效」。
+
+## 何时 / 如何重启
+
+- 修改 **`server-java` 下 Java 代码或 `application.yml`** 后，需 **重启后端**（`spring-boot:run` 不会自动重载 Java 类）。
+- 修改 **前端 Vue/TS/CSS** 后，**按上表应重启前端**；改 **`vite.config.ts`、环境变量、依赖** 时同样重启前端。
+- **重启做法**（Windows 示例）：结束占用 **`5174`**（前端）与 **`8081`**（后端）的进程后，在仓库根目录重新执行 `npm run dev`（或分别执行 `dev:server-java` / `dev:client`）。
+
+## 后端编译与 Java 版本
+
+- 项目 **`pom.xml` 指定 `java.version` 为 1.8**；请用 **JDK 8** 编译与运行，避免 `target/classes` 被其它 JDK 编过后出现 **`UnsupportedClassVersionError`**。
+- 若出现 class 版本混乱，在 `server-java` 目录执行 **`mvnw clean compile -DskipTests`** 后再启动。
+- **Java 8 注意**：`URLEncoder.encode(String, Charset)` 不可用，应使用 **`URLEncoder.encode(s, StandardCharsets.UTF_8.name())`** 或 **`"UTF-8"`**（`throws UnsupportedEncodingException`，外层方法可 `throws Exception`）。
+
+## 员工管理「从飞书选人」
+
+- **`GET /api/employees/feishu-user-options?subjectCode=...`**：按主体 **一次性拉取通讯录用户列表**（服务端有部门扫描上限与返回条数上限，响应含 **`total`**、**`truncated`** 等字段）；**不再使用 `keyword` 查询参数**。
+- **前端**：在 `EmployeeManageView.vue` 中 **本地按姓名 / `feishuOpenId` 过滤**；聚焦输入框时按需加载并缓存全量列表，换主体时清空缓存。

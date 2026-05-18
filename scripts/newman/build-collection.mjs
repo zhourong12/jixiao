@@ -17,12 +17,26 @@ function url(path, query) {
   let s = `{{baseUrl}}/${p}`;
   if (query?.length) {
     const qs = query
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .map(([k, v]) => {
+        const raw = String(v);
+        const encodedValue = raw.includes('{{') ? raw : encodeURIComponent(raw);
+        return `${encodeURIComponent(k)}=${encodedValue}`;
+      })
       .join('&');
     s += `?${qs}`;
   }
   return s;
 }
+
+const http2xxTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      'pm.test("HTTP 2xx", function () { pm.expect(pm.response.code).to.be.within(200, 299); });',
+    ],
+    type: 'text/javascript',
+  },
+};
 
 function req(name, method, path, opts = {}) {
   const headers = [...(opts.noAuth ? [] : [cookieH]), ...(opts.json || opts.body !== undefined ? [jsonH] : [])];
@@ -37,7 +51,8 @@ function req(name, method, path, opts = {}) {
   if (opts.body !== undefined) {
     item.request.body = { mode: 'raw', raw: JSON.stringify(opts.body, null, 2) };
   }
-  if (opts.events) item.event = opts.events;
+  const events = [...(opts.events || []), ...(opts.skipAssert ? [] : [http2xxTests])];
+  if (events.length) item.event = events;
   return item;
 }
 
@@ -48,12 +63,21 @@ const loginTests = {
       'const c = pm.response && pm.response.code;',
       'if (c == null || c < 200 || c >= 300) return;',
       'pm.collectionVariables.unset("jx_session");',
-      'const rows = pm.response.headers.all ? pm.response.headers.all() : [];',
-      'for (const h of rows) {',
-      '  if (String(h.key).toLowerCase() !== "set-cookie") continue;',
-      '  const v = String(h.value);',
-      '  const m = v.match(/jx_session=([^;]+)/);',
-      '  if (m) { pm.collectionVariables.set("jx_session", decodeURIComponent(m[1])); break; }',
+      'if (pm.environment.unset) pm.environment.unset("jx_session");',
+      'let raw = pm.response.headers.get("Set-Cookie") || pm.response.headers.get("set-cookie") || "";',
+      'if (!raw) {',
+      '  const rows = pm.response.headers.all ? pm.response.headers.all() : [];',
+      '  for (const h of rows) {',
+      '    if (String(h.key).toLowerCase() !== "set-cookie") continue;',
+      '    raw = String(h.value);',
+      '    break;',
+      '  }',
+      '}',
+      'const m = String(raw).match(/jx_session=([^;]+)/);',
+      'if (m) {',
+      '  const token = decodeURIComponent(m[1]);',
+      '  pm.collectionVariables.set("jx_session", token);',
+      '  if (pm.environment.set) pm.environment.set("jx_session", token);',
       '}',
       'pm.test("HTTP 2xx", function () { pm.expect(pm.response.code).to.be.within(200, 299); });',
     ],
@@ -61,13 +85,129 @@ const loginTests = {
   },
 };
 
+const setVarLines = [
+  'function setVar(key, value) {',
+  '  pm.collectionVariables.set(key, value);',
+  '  if (pm.environment.set) pm.environment.set(key, value);',
+  '}',
+];
+
 const savePerfIdTests = {
   listen: 'test',
   script: {
     exec: [
+      ...setVarLines,
       'try {',
       '  const j = pm.response.json();',
-      '  if (j.items && j.items.length) pm.collectionVariables.set("performance_id", j.items[0].id);',
+      '  const items = j.items || (j.data && j.data.items) || [];',
+      '  if (items.length) setVar("performance_id", items[0].id);',
+      '} catch (e) {}',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const saveEvalPeriodIdTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  const items = j.items || (j.data && j.data.items) || [];',
+      '  if (items.length) setVar("evaluation_period_id", items[0].id);',
+      '} catch (e) {}',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const saveEvalPeriodIdFromCreateTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  const id = j.id || (j.data && j.data.id);',
+      '  if (id) setVar("evaluation_period_id", id);',
+      '} catch (e) {}',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const assignNewmanPerfPeriodPrerequest = {
+  listen: 'prerequest',
+  script: {
+    exec: [
+      ...setVarLines,
+      'const stamp = String(Date.now());',
+      'setVar("newman_perf_period", `2099-nm-${stamp}`);',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const assignNewmanEvalPeriodPrerequest = {
+  listen: 'prerequest',
+  script: {
+    exec: [
+      ...setVarLines,
+      'const month = String((Date.now() % 12) + 1).padStart(2, "0");',
+      'setVar("newman_eval_period_key", `2096-${month}`);',
+      'const m = parseInt(month, 10);',
+      'const q = Math.floor((m - 1) / 3) + 1;',
+      'setVar("newman_eval_quarter_key", `2096-Q${q}`);',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const saveNewmanEvalQuarterIdFromCreateTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  const id = j.id || (j.data && j.data.id);',
+      '  if (id) setVar("newman_eval_quarter_id", id);',
+      '} catch (e) {}',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const savePerfIdFromBatchTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  const rows = j.results || (j.data && j.data.results) || [];',
+      '  const hit = rows.find((r) => r && r.success && r.id && r.employeeId === "demo_emp_01");',
+      '  if (hit) setVar("performance_id", hit.id);',
+      '} catch (e) {}',
+      'pm.test("batch create demo_emp_01", function () {',
+      '  const j = pm.response.json();',
+      '  pm.expect(j.successCount).to.be.above(0);',
+      '});',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const saveAwardIdTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  const id = j.id || (j.data && j.data.id);',
+      '  if (id) setVar("award_id", id);',
       '} catch (e) {}',
     ],
     type: 'text/javascript',
@@ -86,6 +226,22 @@ const DEMO_REVIEW = [
   { indicatorName: '专业能力', score: 4, comment: 'n' },
 ];
 
+function loginAs(name, username) {
+  return {
+    name,
+    event: [loginTests],
+    request: {
+      method: 'POST',
+      header: [jsonH],
+      body: {
+        mode: 'raw',
+        raw: JSON.stringify({ username, password: '123456' }, null, 2),
+      },
+      url: url('auth/password/login', undefined),
+    },
+  };
+}
+
 const collection = {
   info: {
     name: 'jixiao2 API（全量）',
@@ -98,14 +254,49 @@ const collection = {
     { key: 'jx_session', value: '' },
     { key: 'performance_id', value: '' },
     { key: 'template_id', value: 'tpl-demo-001' },
+    { key: 'scoring_scheme_id', value: 'scheme-default-001' },
+    { key: 'assessment_rule_id', value: 'arule-default-001' },
     { key: 'employee_id', value: 'demo_emp_01' },
     { key: 'evaluation_period_id', value: '' },
     { key: 'award_id', value: '' },
+    { key: 'newman_perf_period', value: '' },
+    { key: 'newman_eval_period_key', value: '' },
+    { key: 'newman_eval_quarter_key', value: '' },
+    { key: 'newman_eval_quarter_id', value: '' },
+    { key: 'newman_feishu_subject_code', value: 'default' },
+    { key: 'newman_feishu_open_id', value: 'ou_newman_placeholder' },
   ],
   item: [
     {
       name: '00 Auth',
       item: [
+        {
+          name: '00 Feishu subjects (public)',
+          event: [http2xxTests],
+          request: {
+            method: 'GET',
+            header: [],
+            url: url('auth/feishu/subjects'),
+          },
+        },
+        {
+          name: '00b Actuator health (public)',
+          event: [http2xxTests],
+          request: {
+            method: 'GET',
+            header: [],
+            url: url('actuator/health'),
+          },
+        },
+        {
+          name: '00c Actuator mappings (public)',
+          event: [http2xxTests],
+          request: {
+            method: 'GET',
+            header: [],
+            url: url('actuator/mappings'),
+          },
+        },
         {
           name: '01 Login password',
           event: [loginTests],
@@ -123,31 +314,28 @@ const collection = {
             url: url('auth/password/login', undefined),
           },
         },
+        {
+          name: '02 Feishu exchange (browser flow)',
+          event: [],
+          request: {
+            method: 'GET',
+            header: [],
+            url: url('auth/feishu/exchange', [
+              ['code', '{{feishu_oauth_code}}'],
+              ['state', '{{feishu_oauth_state}}'],
+            ]),
+          },
+        },
       ],
     },
     {
       name: '01 Session',
-      item: [
-        req('GET session me', 'GET', 'api/session/me'),
-        req('POST session logout', 'POST', 'api/session/logout', { json: true, body: {} }),
-      ],
+      item: [req('GET session me', 'GET', 'api/session/me')],
     },
     {
       name: '02 Home',
       item: [
         req('GET home todos', 'GET', 'api/home/todos', {
-          query: [
-            ['year', '2026'],
-            ['month', '5'],
-          ],
-        }),
-        req('GET home overview', 'GET', 'api/home/overview', {
-          query: [
-            ['year', '2026'],
-            ['month', '5'],
-          ],
-        }),
-        req('GET home action-counts', 'GET', 'api/home/action-counts', {
           query: [
             ['year', '2026'],
             ['month', '5'],
@@ -183,12 +371,47 @@ const collection = {
           query: [
             ['page', '1'],
             ['pageSize', '20'],
+            ['subjectCode', '{{newman_feishu_subject_code}}'],
           ],
         }),
         req('GET employees departments', 'GET', 'api/employees/departments'),
-        req('GET employees department-options', 'GET', 'api/employees/department-options'),
+        req('GET employees department-options', 'GET', 'api/employees/department-options', {
+          query: [['subjectCode', '{{newman_feishu_subject_code}}']],
+        }),
+        req('GET employees department-tree', 'GET', 'api/employees/department-tree'),
+        req('GET admin departments', 'GET', 'api/admin/departments', {
+          query: [
+            ['page', '1'],
+            ['pageSize', '50'],
+          ],
+        }),
+        req('POST admin departments', 'POST', 'api/admin/departments', {
+          json: true,
+          body: {
+            subjectCode: '{{newman_feishu_subject_code}}',
+            name: 'Newman测试部门',
+            sortOrder: 0,
+          },
+        }),
+        req('POST admin departments sync', 'POST', 'api/admin/departments/sync-from-employees'),
         req('GET employees role-options', 'GET', 'api/employees/role-options'),
-        req('GET employees all', 'GET', 'api/employees/all'),
+        req('GET employees feishu-user-options', 'GET', 'api/employees/feishu-user-options', {
+          query: [['subjectCode', '{{newman_feishu_subject_code}}']],
+        }),
+        req('GET employees feishu-user-profile', 'GET', 'api/employees/feishu-user-profile', {
+          query: [
+            ['subjectCode', '{{newman_feishu_subject_code}}'],
+            ['openId', '{{newman_feishu_open_id}}'],
+          ],
+        }),
+        req('GET employees all', 'GET', 'api/employees/all', {
+          query: [['subjectCode', '{{newman_feishu_subject_code}}']],
+        }),
+        req('GET employees calibration-assignees', 'GET', 'api/employees/calibration-assignees'),
+        req('PUT employees calibration-assignees', 'PUT', 'api/employees/calibration-assignees', {
+          json: true,
+          body: { employeeIds: [] },
+        }),
         req('POST employees', 'POST', 'api/employees', {
           json: true,
           body: {
@@ -209,7 +432,7 @@ const collection = {
         req('DELETE employees', 'DELETE', 'api/employees/{{newman_employee_user_id}}'),
         req('POST employees sync-from-lark', 'POST', 'api/employees/sync-from-lark', {
           json: true,
-          body: { clearExisting: false },
+          body: { clearExisting: false, subjectCode: '{{newman_feishu_subject_code}}' },
         }),
       ],
     },
@@ -221,9 +444,9 @@ const collection = {
             ['page', '1'],
             ['pageSize', '20'],
           ],
-          events: [savePerfIdTests],
         }),
         req('GET performances month-periods', 'GET', 'api/performances/create/month-periods'),
+        req('GET performances filter month-periods', 'GET', 'api/performances/filter/month-periods'),
         req('GET performances export', 'GET', 'api/performances/export', {
           query: [['period', '2026-01']],
         }),
@@ -233,13 +456,24 @@ const collection = {
             ['pageSize', '10'],
           ],
         }),
-        req('GET performances by id', 'GET', 'api/performances/{{performance_id}}'),
         req('POST performances batch create', 'POST', 'api/performances', {
           json: true,
           body: {
-            employeeNames: ['张三'],
-            period: '2099-12-newman',
+            employeeIds: ['demo_emp_01'],
+            period: '{{newman_perf_period}}',
+            subjectCode: '{{newman_feishu_subject_code}}',
+            templateId: '{{template_id}}',
+            scoringSchemeId: '{{scoring_scheme_id}}',
           },
+          events: [assignNewmanPerfPeriodPrerequest, savePerfIdFromBatchTests],
+        }),
+        req('GET performances by id', 'GET', 'api/performances/{{performance_id}}'),
+        loginAs('Login as demo employee', 'demo_emp_01'),
+        req('GET performances list (employee)', 'GET', 'api/performances', {
+          query: [
+            ['page', '1'],
+            ['pageSize', '20'],
+          ],
         }),
         req('POST performances select-template', 'POST', 'api/performances/{{performance_id}}/select-template', {
           json: true,
@@ -253,14 +487,17 @@ const collection = {
           json: true,
           body: { reviewType: 'goal', content: DEMO_GOALS },
         }),
+        loginAs('Login as demo manager', 'demo_manager'),
         req('POST performances approve-goal', 'POST', 'api/performances/{{performance_id}}/approve-goal', {
           json: true,
           body: { approved: true },
         }),
+        loginAs('Login as demo employee', 'demo_emp_01'),
         req('POST performances submit self', 'POST', 'api/performances/{{performance_id}}/submit', {
           json: true,
           body: { reviewType: 'self', content: DEMO_REVIEW, personalSummary: 'newman' },
         }),
+        loginAs('Login as demo manager', 'demo_manager'),
         req('POST performances submit manager', 'POST', 'api/performances/{{performance_id}}/submit', {
           json: true,
           body: { reviewType: 'manager', content: DEMO_REVIEW },
@@ -268,19 +505,32 @@ const collection = {
         req('POST performances submit dotted', 'POST', 'api/performances/{{performance_id}}/submit', {
           json: true,
           body: { reviewType: 'dotted_manager', content: DEMO_REVIEW },
+          skipAssert: true,
         }),
         req('POST performances reject', 'POST', 'api/performances/{{performance_id}}/reject', {
           json: true,
           body: { reason: 'newman' },
+          skipAssert: true,
         }),
-        req('POST performances final-review', 'POST', 'api/performances/{{performance_id}}/final-review', {
-          json: true,
-          body: { approved: true },
-        }),
+        loginAs('Login as super admin', 'zhou_rong'),
         req('POST performances calibrate', 'POST', 'api/performances/{{performance_id}}/calibrate', {
           json: true,
           body: { approved: true, finalScore: 4.2 },
         }),
+        req('POST performances confirm-result', 'POST', 'api/performances/{{performance_id}}/confirm-result'),
+        req('DELETE performances by id', 'DELETE', 'api/performances/{{performance_id}}'),
+      ],
+    },
+    {
+      name: '05b Assessment rules',
+      item: [
+        req('GET assessment-rules list', 'GET', 'api/admin/assessment-rules', {
+          query: [
+            ['page', '1'],
+            ['pageSize', '50'],
+          ],
+        }),
+        req('GET assessment-rules by id', 'GET', 'api/admin/assessment-rules/{{assessment_rule_id}}'),
       ],
     },
     {
@@ -300,8 +550,8 @@ const collection = {
             name: 'Newman模板',
             position: '员工',
             indicators: [
-              { name: '指标A', weight: 50, description: 'd' },
-              { name: '指标B', weight: 50, description: 'd' },
+              { name: '指标A', weight: 40, description: 'd' },
+              { name: '指标B', weight: 40, description: 'd' },
             ],
           },
         }),
@@ -310,6 +560,7 @@ const collection = {
           body: { name: '通用绩效考核模板' },
         }),
         req('POST templates toggle-status', 'POST', 'api/admin/templates/{{template_id}}/toggle-status'),
+        req('POST templates toggle-status restore', 'POST', 'api/admin/templates/{{template_id}}/toggle-status'),
         req('POST templates copy', 'POST', 'api/admin/templates/{{template_id}}/copy'),
       ],
     },
@@ -330,6 +581,7 @@ const collection = {
             content: '内容',
             sendType: 'specified',
             targetIds: ['zhou_rong'],
+            subjectCode: '{{newman_feishu_subject_code}}',
           },
         }),
       ],
@@ -342,6 +594,11 @@ const collection = {
           json: true,
           body: { configs: [{ key: 'manager_review_weight', value: '0.7' }] },
         }),
+        req('GET performance-feishu-task-config', 'GET', 'api/admin/performance-feishu-task-config'),
+        req('PATCH performance-feishu-task-config', 'PATCH', 'api/admin/performance-feishu-task-config', {
+          json: true,
+          body: { enabled: true, items: [{ nodeKey: 'goal', dueDays: 7 }] },
+        }),
       ],
     },
     {
@@ -350,21 +607,33 @@ const collection = {
         req('GET evaluation-periods', 'GET', 'api/admin/evaluation-periods', {
           query: [['period_type', 'month']],
         }),
+        req('POST evaluation-periods (quarter prereq)', 'POST', 'api/admin/evaluation-periods', {
+          json: true,
+          body: {
+            periodType: 'quarter',
+            periodKey: '{{newman_eval_quarter_key}}',
+            name: 'Newman季度',
+            sortOrder: 998,
+            status: 'draft',
+          },
+          events: [assignNewmanEvalPeriodPrerequest, saveNewmanEvalQuarterIdFromCreateTests],
+        }),
         req('POST evaluation-periods', 'POST', 'api/admin/evaluation-periods', {
           json: true,
           body: {
             periodType: 'month',
-            periodKey: '2099-01',
+            periodKey: '{{newman_eval_period_key}}',
             name: 'Newman月度',
             sortOrder: 999,
             status: 'draft',
+            parentPeriodId: '{{newman_eval_quarter_id}}',
           },
+          events: [saveEvalPeriodIdFromCreateTests],
         }),
         req('PUT evaluation-periods', 'PUT', 'api/admin/evaluation-periods/{{evaluation_period_id}}', {
           json: true,
-          body: { name: '改名' },
+          body: { name: 'Newman月度改名' },
         }),
-        req('DELETE evaluation-periods', 'DELETE', 'api/admin/evaluation-periods/{{evaluation_period_id}}'),
       ],
     },
     {
@@ -381,6 +650,12 @@ const collection = {
             ['key', '2026-01'],
           ],
         }),
+        req('GET evaluation leaderboard quarter detail', 'GET', 'api/admin/evaluation/leaderboard/quarter-detail', {
+          query: [
+            ['key', '2026-Q2'],
+            ['employeeId', '{{employee_id}}'],
+          ],
+        }),
         req('GET evaluation awards', 'GET', 'api/admin/evaluation/awards', {
           query: [['periodId', '{{evaluation_period_id}}']],
         }),
@@ -388,13 +663,20 @@ const collection = {
           json: true,
           body: {
             periodId: '{{evaluation_period_id}}',
-            awardCode: 'STAR',
+            awardCode: 'monthly_excellence',
             employeeId: '{{employee_id}}',
             remark: 'newman',
           },
+          events: [saveAwardIdTests],
         }),
         req('DELETE evaluation award', 'DELETE', 'api/admin/evaluation/awards/{{award_id}}'),
+        req('DELETE evaluation-periods', 'DELETE', 'api/admin/evaluation-periods/{{evaluation_period_id}}'),
+        req('DELETE evaluation-periods quarter', 'DELETE', 'api/admin/evaluation-periods/{{newman_eval_quarter_id}}'),
       ],
+    },
+    {
+      name: '99 Teardown',
+      item: [req('POST session logout', 'POST', 'api/session/logout', { json: true, body: {} })],
     },
   ],
 };

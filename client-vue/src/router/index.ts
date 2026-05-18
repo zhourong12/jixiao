@@ -2,19 +2,22 @@ import { createRouter, createWebHistory } from "vue-router";
 import { useSessionStore } from "@/stores/session";
 import AppLayout from "@/layouts/AppLayout.vue";
 import LoginView from "@/views/LoginView.vue";
-import HomeView from "@/views/HomeView.vue";
+import FeishuCallbackView from "@/views/FeishuCallbackView.vue";
+import FeishuLoginEntryView from "@/views/FeishuLoginEntryView.vue";
 import TodoView from "@/views/TodoView.vue";
 import PerformanceListView from "@/views/PerformanceListView.vue";
 import PerformanceDetailView from "@/views/PerformanceDetailView.vue";
 import MyPerformanceView from "@/views/MyPerformanceView.vue";
 import PerformanceCalibrationView from "@/views/admin/PerformanceCalibrationView.vue";
 import TemplateManageView from "@/views/admin/TemplateManageView.vue";
-import NotificationManageView from "@/views/admin/NotificationManageView.vue";
+import AssessmentRuleManageView from "@/views/admin/AssessmentRuleManageView.vue";
+import ScoringSchemeManageView from "@/views/admin/ScoringSchemeManageView.vue";
 import EmployeeManageView from "@/views/admin/EmployeeManageView.vue";
+import DepartmentManageView from "@/views/admin/DepartmentManageView.vue";
 import RoleManageView from "@/views/admin/RoleManageView.vue";
 import PermissionManageView from "@/views/admin/PermissionManageView.vue";
 import StatisticsMonthsView from "@/views/admin/StatisticsMonthsView.vue";
-import SystemConfigView from "@/views/admin/SystemConfigView.vue";
+import PerformanceFeishuTaskConfigView from "@/views/admin/PerformanceFeishuTaskConfigView.vue";
 import NotFoundView from "@/views/NotFoundView.vue";
 
 const router = createRouter({
@@ -22,10 +25,22 @@ const router = createRouter({
   routes: [
     { path: "/login", name: "login", component: LoginView, meta: { bare: true } },
     {
+      path: "/feishu-callback",
+      name: "feishu-callback",
+      component: FeishuCallbackView,
+      meta: { bare: true, title: "飞书登录" },
+    },
+    {
+      path: "/feishu/login/:subjectCode?",
+      name: "feishu-login-entry",
+      component: FeishuLoginEntryView,
+      meta: { bare: true, title: "飞书登录" },
+    },
+    {
       path: "/",
       component: AppLayout,
       children: [
-        { path: "", name: "home", component: HomeView, meta: { menuKey: "home" as const, title: "工作台" } },
+        { path: "", redirect: { name: "todo" } },
         { path: "todo", name: "todo", component: TodoView, meta: { menuKey: "todo" as const, title: "待办" } },
         {
           path: "my-performance",
@@ -60,14 +75,24 @@ const router = createRouter({
           meta: { title: "模板管理", menuKey: "admin_templates" as const },
         },
         {
-          path: "admin/notifications",
-          component: NotificationManageView,
-          meta: { title: "通知管理", menuKey: "admin_notifications" as const },
+          path: "admin/assessment-rules",
+          component: AssessmentRuleManageView,
+          meta: { title: "考核规则", menuKey: "admin_assessment_rules" as const },
+        },
+        {
+          path: "admin/scoring-schemes",
+          component: ScoringSchemeManageView,
+          meta: { title: "评分方案", menuKey: "admin_scoring_schemes" as const },
         },
         {
           path: "admin/employees",
           component: EmployeeManageView,
           meta: { title: "员工管理", menuKey: "admin_employees" as const },
+        },
+        {
+          path: "admin/departments",
+          component: DepartmentManageView,
+          meta: { title: "部门管理", menuKey: "admin_departments" as const },
         },
         {
           path: "admin/roles",
@@ -85,17 +110,17 @@ const router = createRouter({
           meta: { title: "周期与评选", menuKey: "admin_statistics_months" as const },
         },
         {
-          path: "admin/system-config",
-          component: SystemConfigView,
-          meta: { title: "系统配置", menuKey: "admin_system_config" as const },
-        },
-        {
-          path: ":pathMatch(.*)*",
-          name: "notfound",
-          component: NotFoundView,
-          meta: { title: "页面不存在" },
+          path: "admin/performance-feishu-task",
+          component: PerformanceFeishuTaskConfigView,
+          meta: { title: "飞书绩效待办", menuKey: "admin_performance_feishu_task" as const },
         },
       ],
+    },
+    {
+      path: "/:pathMatch(.*)*",
+      name: "notfound",
+      component: NotFoundView,
+      meta: { bare: true, title: "页面不存在" },
     },
   ],
 });
@@ -105,8 +130,12 @@ router.beforeEach(async (to) => {
   if (!session.loaded) {
     await session.bootstrap();
   }
-  if (to.name === "login" && session.loggedIn) {
-    return { path: "/", replace: true };
+  if ((to.name === "login" || to.name === "feishu-login-entry") && session.loggedIn) {
+    const next =
+      typeof to.query.next === "string" && to.query.next.startsWith("/") && !to.query.next.startsWith("//")
+        ? to.query.next
+        : "/todo";
+    return { path: next, replace: true };
   }
   return true;
 });

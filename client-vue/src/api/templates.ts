@@ -6,8 +6,9 @@ import type {
 } from "@/types/api.interface";
 import { apiJson } from "./http";
 
-export async function listTemplates(page: number, pageSize: number): Promise<{ items: TemplateListItem[]; total: number }> {
+export async function listTemplates(page: number, pageSize: number, type?: string): Promise<{ items: TemplateListItem[]; total: number }> {
   const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (type) q.set("type", type);
   return apiJson<{ items: TemplateListItem[]; total: number }>(`/api/admin/templates?${q.toString()}`, {
     method: "GET",
   });

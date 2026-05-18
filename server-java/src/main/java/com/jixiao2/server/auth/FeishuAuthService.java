@@ -2,7 +2,8 @@ package com.jixiao2.server.auth;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jixiao2.server.config.Jixiao2Properties;
+import com.jixiao2.server.feishu.FeishuRegistryService;
+import com.jixiao2.server.feishu.FeishuRegistryService.FeishuLoginAppRow;
 import com.jixiao2.server.menu.MenuPermissionService;
 import com.jixiao2.server.security.SessionTokenCodec;
 import java.io.BufferedReader;
@@ -16,6 +17,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -25,42 +27,51 @@ import org.springframework.web.server.ResponseStatusException;
 public class FeishuAuthService {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final Pattern SUBJECT_CODE = Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
 
   private final JdbcTemplate jdbc;
-  private final Jixiao2Properties properties;
+  private final FeishuRegistryService feishuRegistry;
   private final MenuPermissionService menuPermissionService;
   private final SessionTokenCodec sessionTokenCodec;
 
   public FeishuAuthService(
       JdbcTemplate jdbc,
-      Jixiao2Properties properties,
+      FeishuRegistryService feishuRegistry,
       MenuPermissionService menuPermissionService,
       SessionTokenCodec sessionTokenCodec) {
     this.jdbc = jdbc;
-    this.properties = properties;
+    this.feishuRegistry = feishuRegistry;
     this.menuPermissionService = menuPermissionService;
     this.sessionTokenCodec = sessionTokenCodec;
   }
 
-  public String resolveAppId() {
-    String appId = properties.getFeishu().getAppId();
-    if (appId == null || appId.trim().isEmpty()) {
-      throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "未配置 FEISHU_APP_ID");
-    }
-    return appId.trim();
+  public List<Map<String, Object>> listLoginSubjects() {
+    return feishuRegistry.listLoginSubjectOptions();
   }
 
-  public String resolveRedirectUri() {
-    String redirect = properties.getFeishu().getRedirectUri();
-    if (redirect != null && !redirect.trim().isEmpty()) {
-      return redirect.trim();
+  public void assertValidSubjectCode(String subjectCode) {
+    if (subjectCode == null || !SUBJECT_CODE.matcher(subjectCode.trim()).matches()) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid subject");
     }
-    throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "生产环境请配置 FEISHU_REDIRECT_URI");
   }
 
-  public String exchangeCodeForUserAccessToken(String code) {
-    String appId = properties.getFeishu().getAppId();
-    String appSecret = properties.getFeishu().getAppSecret();
+  public FeishuLoginAppRow resolveLoginApp(String subjectCode) {
+    assertValidSubjectCode(subjectCode);
+    return feishuRegistry
+        .findLoginAppBySubjectCode(subjectCode.trim())
+        .orElseThrow(
+            () ->
+                new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "未配置该主体的飞书登录应用（feishu_app.is_login_app）"));
+  }
+
+  public String exchangeCodeForUserAccessToken(String code, String subjectCode) {
+    FeishuLoginAppRow app = resolveLoginApp(subjectCode);
+    return exchangeCodeForUserAccessToken(code, app.getAppId(), app.getAppSecret());
+  }
+
+  public String exchangeCodeForUserAccessToken(String code, String appId, String appSecret) {
     if (appId == null || appId.isEmpty() || appSecret == null || appSecret.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "未配置飞书应用凭证");
     }
@@ -115,11 +126,17 @@ public class FeishuAuthService {
     }
   }
 
-  public Map<String, String> resolveEmployeeByFeishu(String openId, String feishuName) {
+  public Map<String, String> resolveEmployeeByFeishu(String subjectCode, String openId, String feishuName) {
+    assertValidSubjectCode(subjectCode);
+    String sid =
+        feishuRegistry
+            .findSubjectIdByCode(subjectCode.trim())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "未知飞书主体"));
     List<Map<String, String>> byOpen =
         jdbc.query(
-            "SELECT employee_id, name FROM employee_hierarchy WHERE employee_id = ? LIMIT 1",
-            new Object[] {openId},
+            "SELECT employee_id, name FROM employee_hierarchy WHERE feishu_subject_id = ? AND "
+                + "(feishu_open_id = ? OR (feishu_open_id IS NULL AND employee_id = ?)) LIMIT 1",
+            new Object[] {sid, openId, openId},
             (rs, rn) -> {
               Map<String, String> m = new LinkedHashMap<String, String>();
               m.put("employeeId", rs.getString("employee_id"));
@@ -139,8 +156,8 @@ public class FeishuAuthService {
     }
     List<Map<String, String>> byName =
         jdbc.query(
-            "SELECT employee_id, name FROM employee_hierarchy WHERE name = ?",
-            new Object[] {feishuName},
+            "SELECT employee_id, name FROM employee_hierarchy WHERE feishu_subject_id = ? AND name = ?",
+            new Object[] {sid, feishuName},
             (rs, rn) -> {
               Map<String, String> m = new LinkedHashMap<String, String>();
               m.put("employeeId", rs.getString("employee_id"));
@@ -149,18 +166,20 @@ public class FeishuAuthService {
             });
     if (byName.isEmpty()) {
       throw new ResponseStatusException(
-          HttpStatus.BAD_REQUEST, "未找到与飞书姓名「" + feishuName + "」或 open_id 对应的员工，请在员工管理中维护");
+          HttpStatus.BAD_REQUEST,
+          "未找到与飞书姓名「" + feishuName + "」或 open_id 对应的员工（主体 " + subjectCode + "），请在员工管理中维护");
     }
     if (byName.size() > 1) {
       throw new ResponseStatusException(
-          HttpStatus.BAD_REQUEST, "存在多名员工姓名为「" + feishuName + "」，请用飞书 open_id 作为员工编号同步");
+          HttpStatus.BAD_REQUEST,
+          "存在多名员工姓名为「" + feishuName + "」（主体 " + subjectCode + "），请绑定飞书 open_id");
     }
     Map<String, String> row = byName.get(0);
     String name = row.get("name");
     if (name == null || name.trim().isEmpty()) {
       name = feishuName;
     }
-    java.util.Map<String, String> out = new java.util.LinkedHashMap<String, String>();
+    Map<String, String> out = new LinkedHashMap<String, String>();
     out.put("employeeId", row.get("employeeId"));
     out.put("name", name.trim());
     return out;
@@ -177,6 +196,17 @@ public class FeishuAuthService {
   public String buildSessionCookieValue(
       String employeeId, String displayName, List<String> roles, String openId) {
     return sessionTokenCodec.sign(employeeId, displayName, roles, openId);
+  }
+
+  public static String extractSubjectCodeFromState(String state) {
+    if (state == null || state.isEmpty()) {
+      return null;
+    }
+    int i = state.indexOf(':');
+    if (i <= 0 || i >= state.length() - 1) {
+      return null;
+    }
+    return state.substring(0, i);
   }
 
   private static JsonNode postJson(String url, String body, String bearer) throws Exception {

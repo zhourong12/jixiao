@@ -1,20 +1,49 @@
 services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: jixiao
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server-java/database/sql/initial.sql:/docker-entrypoint-initdb.d/01-initial.sql:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   jixiao2-api:
     build:
       context: ./server-java
+    restart: unless-stopped
+    environment:
+      JIXIAO2_JDBC_URL: jdbc:mysql://mysql:3306/jixiao?characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
+      JIXIAO2_JDBC_USER: root
+      JIXIAO2_JDBC_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      SESSION_JWT_SECRET: ${SESSION_JWT_SECRET:?set SESSION_JWT_SECRET}
+      JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS: ${JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS:-http://localhost:*,http://127.0.0.1:*}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
     ports:
       - "8081:8081"
-    env_file:
-      - ./server-java/.env
-    environment:
-      SPRING_PROFILES_ACTIVE: prod
 
   jixiao2-web:
     build:
       context: ./client-vue
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8081}
-    ports:
-      - "8080:80"
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
     depends_on:
       - jixiao2-api
+    ports:
+      - "80:80"
+
+volumes:
+  mysql_data:

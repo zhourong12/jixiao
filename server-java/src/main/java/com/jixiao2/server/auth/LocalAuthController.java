@@ -1,5 +1,6 @@
 package com.jixiao2.server.auth;
 
+import com.jixiao2.server.config.Jixiao2Properties;
 import com.jixiao2.server.employee.EmployeeLookupService;
 import com.jixiao2.server.employee.EmployeeLookupService.EmployeeRow;
 import com.jixiao2.server.menu.MenuPermissionService;
@@ -25,21 +26,30 @@ public class LocalAuthController {
   private final EmployeeLookupService employees;
   private final MenuPermissionService menuPermissionService;
   private final SessionCookieSupport sessionCookieSupport;
+  private final Jixiao2Properties jixiao2Properties;
 
   public LocalAuthController(
       SessionTokenCodec sessionTokenCodec,
       EmployeeLookupService employees,
       MenuPermissionService menuPermissionService,
-      SessionCookieSupport sessionCookieSupport) {
+      SessionCookieSupport sessionCookieSupport,
+      Jixiao2Properties jixiao2Properties) {
     this.sessionTokenCodec = sessionTokenCodec;
     this.employees = employees;
     this.menuPermissionService = menuPermissionService;
     this.sessionCookieSupport = sessionCookieSupport;
+    this.jixiao2Properties = jixiao2Properties;
   }
 
   @PostMapping("/auth/password/login")
   public ResponseEntity<Map<String, Object>> passwordLogin(
       @RequestBody Map<String, String> body) {
+    if (!jixiao2Properties.getAuth().isPasswordLoginEnabled()) {
+      Map<String, Object> err = new LinkedHashMap<String, Object>();
+      err.put("success", Boolean.FALSE);
+      err.put("message", "账密登录已关闭，请使用飞书登录");
+      return ResponseEntity.status(403).body(err);
+    }
     if (!sessionTokenCodec.hasSecret()) {
       Map<String, Object> err = new LinkedHashMap<String, Object>();
       err.put("success", Boolean.FALSE);

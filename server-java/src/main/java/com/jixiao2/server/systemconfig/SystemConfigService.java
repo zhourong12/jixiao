@@ -39,7 +39,7 @@ public class SystemConfigService {
   }
 
   public Map<String, Object> getAll(String userId) {
-    menuPermissionService.assertMenuAllowed(userId, "admin_system_config");
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
     List<Map<String, Object>> rows =
         jdbc.query(
             "SELECT config_key, config_value FROM system_config",
@@ -67,7 +67,7 @@ public class SystemConfigService {
 
   @SuppressWarnings("unchecked")
   public Map<String, Boolean> update(String userId, Map<String, Object> body) {
-    menuPermissionService.assertMenuAllowed(userId, "admin_system_config");
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
     Set<String> validKeys = new HashSet<String>();
     for (Map<String, Object> schema : CONFIG_SCHEMA) {
       validKeys.add(String.valueOf(schema.get("key")));
