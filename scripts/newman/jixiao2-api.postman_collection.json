@@ -64,6 +64,14 @@
     {
       "key": "newman_feishu_open_id",
       "value": "ou_newman_placeholder"
+    },
+    {
+      "key": "api_token",
+      "value": ""
+    },
+    {
+      "key": "api_token_id",
+      "value": ""
     }
   ],
   "item": [
@@ -441,6 +449,200 @@
       ]
     },
     {
+      "name": "03b API Tokens",
+      "item": [
+        {
+          "name": "GET api tokens",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/api-tokens"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "function setVar(key, value) {",
+                  "  pm.collectionVariables.set(key, value);",
+                  "  if (pm.environment.set) pm.environment.set(key, value);",
+                  "}",
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const items = j.items || (j.data && j.data.items) || [];",
+                  "  const hit = items.find((r) => r && r.name === \"Newman API Token\");",
+                  "  if (hit && hit.id) setVar(\"api_token_id\", hit.id);",
+                  "} catch (e) {}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST api token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/api-tokens",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Newman API Token\",\n  \"expiresAt\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "function setVar(key, value) {",
+                  "  pm.collectionVariables.set(key, value);",
+                  "  if (pm.environment.set) pm.environment.set(key, value);",
+                  "}",
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  if (j.token) setVar(\"api_token\", j.token);",
+                  "} catch (e) {}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET session me (Bearer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{api_token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/session/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET api tokens after create",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/api-tokens"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "function setVar(key, value) {",
+                  "  pm.collectionVariables.set(key, value);",
+                  "  if (pm.environment.set) pm.environment.set(key, value);",
+                  "}",
+                  "try {",
+                  "  const j = pm.response.json();",
+                  "  const items = j.items || (j.data && j.data.items) || [];",
+                  "  const hit = items.find((r) => r && r.name === \"Newman API Token\");",
+                  "  if (hit && hit.id) setVar(\"api_token_id\", hit.id);",
+                  "} catch (e) {}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE api token",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/api-tokens/{{api_token_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "04 Employees",
       "item": [
         {
@@ -606,6 +808,62 @@
               }
             ],
             "url": "{{baseUrl}}/api/admin/departments/sync-from-employees"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET admin auth-config",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/auth-config"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH admin auth-config",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/auth-config",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"passwordLoginEnabled\": true\n}"
+            }
           },
           "event": [
             {
@@ -909,6 +1167,38 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"clearExisting\": false,\n  \"subjectCode\": \"{{newman_feishu_subject_code}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST employees sync-from-feishu",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/employees/sync-from-feishu",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
             }
           },
           "event": [
@@ -1634,6 +1924,27 @@
           }
         },
         {
+          "name": "POST performances ops reject-self-review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/performances/ops/reject-self-review",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"recordId\": \"{{performance_id}}\",\n  \"reason\": \"newman admin reject\"\n}"
+            }
+          }
+        },
+        {
           "name": "POST performances calibrate",
           "request": {
             "method": "POST",
@@ -2063,6 +2374,62 @@
           ]
         },
         {
+          "name": "GET platform-settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/platform-settings"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH platform-settings",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/platform-settings",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appBadgeEnabled\": true,\n  \"feishuTaskEnabled\": true,\n  \"passwordLoginEnabled\": false\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
           "name": "GET performance-feishu-task-config",
           "request": {
             "method": "GET",
@@ -2104,6 +2471,110 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"enabled\": true,\n  \"items\": [\n    {\n      \"nodeKey\": \"goal\",\n      \"dueDays\": 7\n    }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET feishu app-badge-enabled",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/feishu/app-badge/enabled"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET feishu jssdk-config",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/feishu/jssdk-config?url=http%3A%2F%2F127.0.0.1%3A5174%2Ftodo"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST feishu app-badge-sync",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/feishu/app-badge/sync"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"HTTP 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST feishu badge-client-log",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Cookie",
+                "value": "jx_session={{jx_session}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/feishu/badge-client-log",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lines\": [\n    \"[feishu-badge] newman test\"\n  ]\n}"
             }
           },
           "event": [

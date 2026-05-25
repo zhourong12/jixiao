@@ -1,25 +1,49 @@
 #!/usr/bin/env bash
-# 正式（默认）：./deploy/start-web.sh          -> deploy/.env
-# 测试：      DEPLOY_ENV=test ./deploy/start-web.sh -> deploy/.env-test
+# 正式环境前端（单文件，无额外 source）
+#   cp deploy/.env.example deploy/.env
+#   ./deploy/start-web.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=lib-env.sh
-. "$(dirname "$0")/lib-env.sh"
 
-ENV_FILE="$(deploy_resolve_env_file "$ROOT")"
-DEPLOY_ENV="${DEPLOY_ENV:-prod}"
-deploy_load_env_file "$ENV_FILE"
-echo "部署环境：$DEPLOY_ENV，配置文件：$ENV_FILE"
-
+# ---------- 正式环境参数 ----------
+WEB_PORT=80
+WEB_DOMAIN="kpi.ccka.com"
+API_UPSTREAM="127.0.0.1:8081"
+RUNTIME_DIR="$ROOT/deploy/runtime"
+LOG_DIR="$RUNTIME_DIR/logs"
+LOG_RETENTION_DAYS=15
+SERVER_NAME="$WEB_DOMAIN"
+SITE_NAME="jixiao2"
+ENV_FILE="$ROOT/deploy/.env"
 CLIENT_DIR="${CLIENT_DIR:-$ROOT/dist/client}"
-WEB_PORT="${WEB_PORT:-5174}"
-API_UPSTREAM="${API_UPSTREAM:-127.0.0.1:8081}"
-SERVER_NAME="${SERVER_NAME:-_}"
-RUNTIME_DIR="${RUNTIME_DIR:-$ROOT/deploy/runtime}"
+
+daily_log_file() {
+  mkdir -p "$LOG_DIR"
+  printf '%s/nginx-error-%s.log\n' "$LOG_DIR" "$(date +%F)"
+}
+
+prune_old_logs() {
+  [ -d "$LOG_DIR" ] || return 0
+  find "$LOG_DIR" -maxdepth 1 -type f -name 'nginx-error-*.log' -mtime +"${LOG_RETENTION_DAYS}" -delete 2>/dev/null || true
+}
+
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+fi
+
+WEB_PORT=80
+WEB_DOMAIN="kpi.ccka.com"
+SERVER_NAME="$WEB_DOMAIN"
+API_UPSTREAM="127.0.0.1:8081"
+
+NGINX_ERROR_LOG="$(daily_log_file)"
+prune_old_logs
 NGINX_CONF="$RUNTIME_DIR/nginx.conf"
 PID_FILE="$RUNTIME_DIR/nginx.pid"
-SITE_NAME="${SITE_NAME:-jixiao2}"
 SITE_FILE="${SITE_FILE:-/etc/nginx/sites-available/${SITE_NAME}.conf}"
 ENABLED_LINK="${ENABLED_LINK:-/etc/nginx/sites-enabled/${SITE_NAME}.conf}"
 
@@ -48,7 +72,7 @@ port_in_use() {
 
 prepare_web_permissions() {
   if [ ! -f "${CLIENT_DIR}/index.html" ]; then
-    echo "未找到 ${CLIENT_DIR}/index.html，请先执行 npm run package" >&2
+    echo "未找到 ${CLIENT_DIR}/index.html，请先执行 npm run build:prod" >&2
     exit 1
   fi
   if [ "$(id -u)" -ne 0 ]; then
@@ -129,46 +153,40 @@ EOF
 }
 
 USE_SYSTEM_NGINX="${USE_SYSTEM_NGINX:-}"
+# 域名走 80/443 时写入系统 Nginx 站点（与测试站 test-kpi.ccka.com 可并存）
+if [ -z "$USE_SYSTEM_NGINX" ] && { [ "$WEB_PORT" = "80" ] || [ "$WEB_PORT" = "443" ]; }; then
+  USE_SYSTEM_NGINX=1
+fi
 if [ -z "$USE_SYSTEM_NGINX" ] && [ "$WEB_PORT" = "80" ] && port_in_use 80; then
   USE_SYSTEM_NGINX=1
 fi
 
+echo "环境：正式"
+echo "站点域名：$WEB_DOMAIN"
+echo "配置：$ENV_FILE"
 echo "前端目录：$CLIENT_DIR"
-echo "监听端口：$WEB_PORT"
+echo "监听端口：$WEB_PORT（server_name $SERVER_NAME）"
 echo "API 上游：$API_UPSTREAM"
+echo "日志目录：$LOG_DIR（保留 ${LOG_RETENTION_DAYS} 天）"
+echo "Nginx 错误日志：$NGINX_ERROR_LOG"
 
 prepare_web_permissions
 
 if [ "$USE_SYSTEM_NGINX" = "1" ]; then
-  echo "检测到 ${WEB_PORT} 端口已被占用，改为写入系统 Nginx 站点配置"
-  if [ "$(id -u)" -ne 0 ]; then
-    write_server_block | sudo tee "$SITE_FILE" >/dev/null
-    sudo ln -sf "$SITE_FILE" "$ENABLED_LINK"
-    sudo nginx -t
-    sudo systemctl reload nginx
-  else
-    write_server_block >"$SITE_FILE"
-    ln -sf "$SITE_FILE" "$ENABLED_LINK"
-    nginx -t
-    systemctl reload nginx
-  fi
-  echo "站点配置：$SITE_FILE"
-  echo "系统 Nginx 已重载"
-  echo "访问地址：http://<服务器IP>:${WEB_PORT}/"
-  echo "本机自检：curl -I http://127.0.0.1:${WEB_PORT}/"
-  exit 0
+  echo "使用系统 Nginx（80 端口双域名请一并刷新正式+测试站点）"
+  exec "$ROOT/deploy/reload-nginx-sites.sh"
 fi
 
 stop_web
-
-mkdir -p "$RUNTIME_DIR"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 CLIENT_DIR_ESCAPED="$(printf '%s' "$CLIENT_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 NGINX_USER="$(nginx_worker_user)"
+NGINX_ERROR_ESCAPED="$(printf '%s' "$NGINX_ERROR_LOG" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 
 cat > "$NGINX_CONF" <<EOF
 user $NGINX_USER;
 worker_processes 1;
-error_log $RUNTIME_DIR/error.log warn;
+error_log "$NGINX_ERROR_ESCAPED" warn;
 pid $PID_FILE;
 
 events {
@@ -215,9 +233,11 @@ EOF
 if [ "${BACKGROUND:-1}" = "1" ]; then
   nginx -c "$NGINX_CONF"
   echo "独立 Nginx 已重启，PID 文件：$PID_FILE"
-  echo "访问地址：http://<服务器IP>:${WEB_PORT}/"
-  echo "本机自检：curl -I http://127.0.0.1:${WEB_PORT}/"
-  echo "错误日志：$RUNTIME_DIR/error.log"
+  if [ "$WEB_PORT" = "80" ] || [ "$WEB_PORT" = "443" ]; then
+    echo "访问地址：http://${WEB_DOMAIN}/"
+  else
+    echo "访问地址：http://${WEB_DOMAIN}:${WEB_PORT}/"
+  fi
   exit 0
 fi
 

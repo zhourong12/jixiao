@@ -162,14 +162,11 @@ public class NotificationService {
       int sep = en.getKey().indexOf(appPairSep);
       String appId = sep <= 0 ? "" : en.getKey().substring(0, sep);
       String appSecret = sep < 0 || sep >= en.getKey().length() - 1 ? "" : en.getKey().substring(sep + 1);
-      String tenantToken;
-      try {
-        tenantToken = feishuImService.fetchTenantAccessToken(appId, appSecret);
-      } catch (Exception ex) {
+      if (appId.isEmpty() || appSecret.isEmpty()) {
         continue;
       }
       for (String receiveId : en.getValue()) {
-        String err = feishuImService.sendTextToUser(tenantToken, receiveId, fullText);
+        String err = feishuImService.sendTextToUserWithRetry(appId, appSecret, receiveId, fullText);
         if (err == null) {
           sentOk++;
         }

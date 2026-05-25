@@ -1,9 +1,7 @@
 package com.jixiao2.server.performance;
 
-import com.jixiao2.server.menu.MenuPermissionService;
+import com.jixiao2.server.admin.AdminPlatformSettingsController;
 import com.jixiao2.server.web.CurrentUser;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -11,45 +9,35 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/** @deprecated 请使用 {@link AdminPlatformSettingsController} {@code /api/admin/platform-settings} */
 @RestController
 @RequestMapping("/api/admin/performance-feishu-task-config")
 public class PerformanceFeishuTaskConfigController {
 
-  private final MenuPermissionService menuPermissionService;
-  private final PerformanceFeishuTaskService performanceFeishuTaskService;
+  private final AdminPlatformSettingsController platformSettingsController;
 
-  public PerformanceFeishuTaskConfigController(
-      MenuPermissionService menuPermissionService, PerformanceFeishuTaskService performanceFeishuTaskService) {
-    this.menuPermissionService = menuPermissionService;
-    this.performanceFeishuTaskService = performanceFeishuTaskService;
+  public PerformanceFeishuTaskConfigController(AdminPlatformSettingsController platformSettingsController) {
+    this.platformSettingsController = platformSettingsController;
   }
 
   @GetMapping
   public Map<String, Object> get(@CurrentUser String userId) {
-    menuPermissionService.assertMenuAllowed(userId, "admin_performance_feishu_task");
-    Map<String, Object> out = new LinkedHashMap<String, Object>();
-    out.put("enabled", performanceFeishuTaskService.isFeishuTaskEnabled());
-    out.put("items", performanceFeishuTaskService.listNodeConfig(userId));
+    Map<String, Object> cfg = platformSettingsController.get(userId);
+    Map<String, Object> out = new java.util.LinkedHashMap<String, Object>();
+    out.put("enabled", cfg.get("feishuTaskEnabled"));
+    out.put("items", cfg.get("feishuTaskItems"));
     return out;
   }
 
-  @SuppressWarnings("unchecked")
   @PatchMapping
   public Map<String, Object> patch(@CurrentUser String userId, @RequestBody Map<String, Object> body) {
-    menuPermissionService.assertMenuAllowed(userId, "admin_performance_feishu_task");
-    Object enabledObj = body.get("enabled");
-    if (enabledObj != null) {
-      boolean on =
-          enabledObj instanceof Boolean
-              ? (Boolean) enabledObj
-              : "1".equals(String.valueOf(enabledObj).trim())
-                  || "true".equalsIgnoreCase(String.valueOf(enabledObj).trim());
-      performanceFeishuTaskService.setFeishuTaskEnabled(on);
+    Map<String, Object> mapped = new java.util.LinkedHashMap<String, Object>();
+    if (body.containsKey("enabled")) {
+      mapped.put("feishuTaskEnabled", body.get("enabled"));
     }
-    List<Map<String, Object>> items = (List<Map<String, Object>>) body.get("items");
-    performanceFeishuTaskService.updateNodeConfigs(userId, items);
-    Map<String, Object> out = new LinkedHashMap<String, Object>();
-    out.put("success", true);
-    return out;
+    if (body.containsKey("items")) {
+      mapped.put("feishuTaskItems", body.get("items"));
+    }
+    return platformSettingsController.patch(userId, mapped);
   }
 }

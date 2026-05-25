@@ -13,7 +13,7 @@ const MENU_LABELS: Record<MenuPermissionKey, string> = {
   performance_batch_create: "批量创建绩效",
   performance_review_admin: "绩效复审管理",
   admin_performance_calibration: "绩效校准",
-  admin_performance_feishu_task: "飞书绩效待办",
+  admin_performance_feishu_task: "系统配置",
   my_performance: "我的绩效",
   admin_templates: "模板管理",
   admin_assessment_rules: "考核规则",
@@ -23,6 +23,7 @@ const MENU_LABELS: Record<MenuPermissionKey, string> = {
   admin_roles: "角色管理",
   admin_permissions: "权限管理",
   admin_statistics_months: "周期与评选",
+  admin_api_tokens: "API Token",
 };
 
 const MENU_GROUPS: { label: string; keys: MenuPermissionKey[] }[] = [
@@ -49,6 +50,7 @@ const MENU_GROUPS: { label: string; keys: MenuPermissionKey[] }[] = [
       "admin_permissions",
       "admin_statistics_months",
       "admin_performance_feishu_task",
+      "admin_api_tokens",
     ],
   },
 ];

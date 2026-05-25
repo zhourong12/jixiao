@@ -1,6 +1,5 @@
 package com.jixiao2.server.auth;
 
-import com.jixiao2.server.config.Jixiao2Properties;
 import com.jixiao2.server.feishu.FeishuRegistryService.FeishuLoginAppRow;
 import com.jixiao2.server.web.SessionCookieSupport;
 import java.net.URLEncoder;
@@ -33,16 +32,16 @@ public class FeishuAuthController {
 
   private final FeishuAuthService feishuAuthService;
   private final SessionCookieSupport sessionCookieSupport;
-  private final Jixiao2Properties jixiao2Properties;
+  private final AuthConfigService authConfigService;
   private final SecureRandom secureRandom = new SecureRandom();
 
   public FeishuAuthController(
       FeishuAuthService feishuAuthService,
       SessionCookieSupport sessionCookieSupport,
-      Jixiao2Properties jixiao2Properties) {
+      AuthConfigService authConfigService) {
     this.feishuAuthService = feishuAuthService;
     this.sessionCookieSupport = sessionCookieSupport;
-    this.jixiao2Properties = jixiao2Properties;
+    this.authConfigService = authConfigService;
   }
 
   @GetMapping("/subjects")
@@ -50,7 +49,7 @@ public class FeishuAuthController {
     List<Map<String, Object>> items = feishuAuthService.listLoginSubjects();
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("items", items);
-    out.put("passwordLoginEnabled", jixiao2Properties.getAuth().isPasswordLoginEnabled());
+    out.put("passwordLoginEnabled", authConfigService.isPasswordLoginEnabled());
     return out;
   }
 

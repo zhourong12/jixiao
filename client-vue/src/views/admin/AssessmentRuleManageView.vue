@@ -142,42 +142,62 @@ watch([page, pageSize], () => void load());
     <p v-if="message && !dialogOpen" class="text-sm text-destructive">{{ message }}</p>
     <section class="ui-list-panel">
       <div v-if="loading" class="ui-loading">加载中...</div>
-      <div v-else class="ui-table-wrap">
-        <table class="ui-table min-w-[640px]">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>上级权重</th>
-              <th>虚线权重</th>
-              <th>状态</th>
-              <th>更新时间</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in items" :key="row.id">
-              <td>{{ row.name }}</td>
-              <td class="tabular-nums">{{ Math.round(row.managerWeight * 100) }}%</td>
-              <td class="tabular-nums">{{ Math.round(row.dottedManagerWeight * 100) }}%</td>
-              <td>{{ row.status === "enabled" ? "启用" : "停用" }}</td>
-              <td class="text-muted-foreground">{{ formatDateTime(row.updatedAt) }}</td>
-              <td class="text-right">
-                <button type="button" class="mr-2 text-primary hover:underline" @click="edit(row)">编辑</button>
-                <button type="button" class="text-destructive hover:underline" @click="remove(row)">删除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <template v-else>
+        <div class="ui-mobile-cards p-3">
+          <div v-for="row in items" :key="row.id" class="ui-mobile-card">
+            <div class="flex items-start justify-between gap-2">
+              <span class="font-semibold">{{ row.name }}</span>
+              <span class="shrink-0 rounded-full px-2 py-0.5 text-xs" :class="row.status === 'enabled' ? 'bg-[var(--success-bg)] text-[var(--success)]' : 'bg-accent text-muted-foreground'">{{ row.status === "enabled" ? "启用" : "停用" }}</span>
+            </div>
+            <div class="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+              <span>上级 {{ Math.round(row.managerWeight * 100) }}%</span>
+              <span>虚线 {{ Math.round(row.dottedManagerWeight * 100) }}%</span>
+            </div>
+            <div class="mt-3 flex items-center gap-3">
+              <button type="button" class="text-sm text-primary hover:underline" @click="edit(row)">编辑</button>
+              <button type="button" class="text-sm text-destructive hover:underline" @click="remove(row)">删除</button>
+            </div>
+          </div>
+        </div>
+        <div class="ui-desktop-table">
+          <div class="ui-table-wrap">
+            <table class="ui-table min-w-[640px]">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>上级权重</th>
+                  <th>虚线权重</th>
+                  <th>状态</th>
+                  <th>更新时间</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in items" :key="row.id">
+                  <td>{{ row.name }}</td>
+                  <td class="tabular-nums">{{ Math.round(row.managerWeight * 100) }}%</td>
+                  <td class="tabular-nums">{{ Math.round(row.dottedManagerWeight * 100) }}%</td>
+                  <td>{{ row.status === "enabled" ? "启用" : "停用" }}</td>
+                  <td class="text-muted-foreground">{{ formatDateTime(row.updatedAt) }}</td>
+                  <td class="text-right">
+                    <button type="button" class="mr-2 text-primary hover:underline" @click="edit(row)">编辑</button>
+                    <button type="button" class="text-destructive hover:underline" @click="remove(row)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </section>
 
     <div
       v-if="dialogOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="ui-dialog-backdrop"
       @click.self="closeDialog"
     >
-      <div class="w-full max-w-md rounded-md border bg-card p-6 shadow-lg">
+      <div class="w-full max-w-md rounded-md border bg-card p-4 shadow-lg md:p-6">
         <h2 class="text-lg font-semibold">{{ editingId ? "编辑考核规则" : "新建考核规则" }}</h2>
         <div class="mt-4 space-y-3">
           <div>

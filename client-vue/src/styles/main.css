@@ -39,6 +39,15 @@
       "PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Noto Sans SC",
       -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
+
+  /* iOS/飞书 WebView：输入框字号 <16px 会聚焦放大且失焦不还原 */
+  @media (max-width: 767px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
 }
 
 @layer components {
@@ -51,7 +60,7 @@
   }
 
   .ui-card {
-    @apply rounded-md border border-border bg-card p-6 shadow-sm;
+    @apply rounded-md border border-border bg-card p-4 shadow-sm md:p-6;
   }
 
   .ui-card-compact {
@@ -64,7 +73,7 @@
 
   .ui-input,
   .ui-select {
-    @apply w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition-colors placeholder:text-muted-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50;
+    @apply w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition-colors placeholder:text-muted-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 max-md:text-base;
   }
 
   .ui-btn {
@@ -72,15 +81,15 @@
   }
 
   .ui-btn-primary {
-    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 bg-primary text-primary-foreground hover:opacity-90;
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 bg-primary text-primary-foreground hover:opacity-90 md:min-h-0;
   }
 
   .ui-btn-outline {
-    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 border border-border bg-card text-foreground hover:bg-accent;
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 border border-border bg-card text-foreground hover:bg-accent md:min-h-0;
   }
 
   .ui-btn-ghost {
-    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 text-primary hover:bg-accent;
+    @apply inline-flex min-h-[44px] items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 text-primary hover:bg-accent md:min-h-0;
   }
 
   .ui-btn-sm {
@@ -192,7 +201,7 @@
   }
 
   .ui-table {
-    @apply w-full min-w-[960px] text-left text-base leading-6;
+    @apply w-full text-left text-sm leading-6 md:text-base;
   }
 
   .ui-table thead {
@@ -200,11 +209,11 @@
   }
 
   .ui-table th {
-    @apply px-4 py-3.5 text-base font-semibold text-foreground;
+    @apply px-3 py-3 text-sm font-semibold text-foreground md:px-4 md:py-3.5 md:text-base;
   }
 
   .ui-table td {
-    @apply px-4 py-4 align-middle text-base text-foreground;
+    @apply px-3 py-3 align-middle text-sm text-foreground md:px-4 md:py-4 md:text-base;
   }
 
   .ui-table tbody tr {
@@ -220,11 +229,11 @@
   }
 
   .ui-pagination {
-    @apply flex flex-wrap items-center justify-end gap-3 border-t border-border px-4 py-3;
+    @apply flex flex-wrap items-center justify-end gap-2 border-t border-border px-3 py-3 md:gap-3 md:px-4;
   }
 
   .ui-pagination-range {
-    @apply mr-auto text-sm text-muted-foreground;
+    @apply mr-auto hidden text-sm text-muted-foreground md:block;
   }
 
   .ui-pagination-controls {
@@ -241,7 +250,7 @@
   }
 
   .ui-pagination-size {
-    @apply w-auto min-w-[7.5rem] py-1.5 text-sm;
+    @apply hidden w-auto min-w-[7.5rem] py-1.5 text-sm md:inline-flex;
   }
 
   .ui-empty {
@@ -254,5 +263,26 @@
 
   .ui-period {
     @apply max-w-[12rem] truncate font-mono text-xs text-muted-foreground;
+  }
+
+  .ui-dialog-backdrop {
+    @apply fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-y-contain bg-black/40 p-0 md:items-center md:p-4;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ui-dialog-panel {
+    @apply w-full shrink-0 bg-card p-4 shadow-sm max-md:min-h-[100dvh] max-md:rounded-none max-md:border-0 max-md:pb-[max(1rem,env(safe-area-inset-bottom))] md:max-h-[90vh] md:overflow-y-auto md:rounded-md md:border md:border-border md:p-6;
+  }
+
+  .ui-mobile-card {
+    @apply rounded-md border border-border bg-card p-3 shadow-sm;
+  }
+
+  .ui-mobile-cards {
+    @apply space-y-3 md:hidden;
+  }
+
+  .ui-desktop-table {
+    @apply hidden md:block;
   }
 }

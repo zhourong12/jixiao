@@ -1,6 +1,8 @@
 package com.jixiao2.server.web;
 
 import com.jixiao2.server.api.SessionController;
+import com.jixiao2.server.auth.ApiTokenService;
+import com.jixiao2.server.auth.ApiTokenService.ApiTokenInfo;
 import com.jixiao2.server.security.SessionPayload;
 import com.jixiao2.server.security.SessionTokenCodec;
 import java.io.IOException;
@@ -21,9 +23,11 @@ public class SessionAuthInterceptor implements HandlerInterceptor {
   public static final String ATTR_USER_NAME = "jixiao2UserName";
 
   private final SessionTokenCodec codec;
+  private final ApiTokenService apiTokenService;
 
-  public SessionAuthInterceptor(SessionTokenCodec codec) {
+  public SessionAuthInterceptor(SessionTokenCodec codec, ApiTokenService apiTokenService) {
     this.codec = codec;
+    this.apiTokenService = apiTokenService;
   }
 
   private static boolean isAnonymousAllowed(String method, String uri) {
@@ -39,13 +43,31 @@ public class SessionAuthInterceptor implements HandlerInterceptor {
     return false;
   }
 
-  private void attachIfPresent(HttpServletRequest request, String rawCookie) {
+  private boolean attachIfPresent(HttpServletRequest request, String rawCookie) {
     SessionPayload p = rawCookie == null ? null : codec.verify(rawCookie);
     if (p != null && p.getSub() != null && !p.getSub().isEmpty()) {
       request.setAttribute(ATTR_USER_ID, p.getSub());
       String nm = p.getName();
       request.setAttribute(ATTR_USER_NAME, nm == null || nm.isEmpty() ? p.getSub() : nm);
+      return true;
     }
+    return attachBearerIfPresent(request);
+  }
+
+  private boolean attachBearerIfPresent(HttpServletRequest request) {
+    String authHeader = request.getHeader("Authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      return false;
+    }
+    String token = authHeader.substring("Bearer ".length()).trim();
+    ApiTokenInfo info = apiTokenService.validateToken(token);
+    if (info == null || info.getUserId() == null || info.getUserId().isEmpty()) {
+      return false;
+    }
+    request.setAttribute(ATTR_USER_ID, info.getUserId());
+    String nm = info.getUserName();
+    request.setAttribute(ATTR_USER_NAME, nm == null || nm.isEmpty() ? info.getUserId() : nm);
+    return true;
   }
 
   @Override
@@ -60,14 +82,10 @@ public class SessionAuthInterceptor implements HandlerInterceptor {
       return true;
     }
 
-    SessionPayload p = raw == null ? null : codec.verify(raw);
-    if (p == null || p.getSub() == null || p.getSub().isEmpty()) {
+    if (!attachIfPresent(request, raw)) {
       write401(response);
       return false;
     }
-    request.setAttribute(ATTR_USER_ID, p.getSub());
-    String nm = p.getName();
-    request.setAttribute(ATTR_USER_NAME, nm == null || nm.isEmpty() ? p.getSub() : nm);
     return true;
   }
 

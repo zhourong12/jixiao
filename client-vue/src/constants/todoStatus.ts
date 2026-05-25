@@ -1,13 +1,14 @@
 import type { PerformanceStatus, TodoItem, TodoType } from "@/types/api.interface";
 import {
   PERFORMANCE_STATUS_TONES,
+  performanceStatusLabel,
   type PerformanceStatusTone,
   statusToneActionClass,
   statusToneBadgeClass,
   statusToneRowClass,
 } from "@/constants/performanceStatus";
 
-export type TodoCategory = "acceptance" | "score" | "self" | "goal";
+export type TodoCategory = "acceptance" | "score" | "self" | "goal" | "flow";
 
 export interface TodoMeta {
   label: string;
@@ -18,30 +19,17 @@ export interface TodoMeta {
   urgent: boolean;
 }
 
-export const TODO_STATUS_LABEL: Record<TodoType, string> = {
-  template_selection: "选择模板",
-  goal_setting: "目标设定",
-  goal_rejected: "目标驳回",
-  goal_pending_review: "目标验收",
-  self_review: "自评",
-  manager_review: "主管评分",
-  dual_manager_review: "主管并行评分",
-  dotted_manager_review: "虚线主管评分",
-  final_review: "终审验收",
-  issued: "结果确认",
-};
+type TodoMetaCore = Omit<TodoMeta, "label">;
 
-const TODO_META: Record<TodoType, TodoMeta> = {
+const TODO_META_CORE: Record<TodoType, TodoMetaCore> = {
   template_selection: {
-    label: TODO_STATUS_LABEL.template_selection,
     category: "goal",
     categoryLabel: "目标",
     tone: PERFORMANCE_STATUS_TONES.template_selection,
-    actionLabel: "去选择",
+    actionLabel: "去设定",
     urgent: true,
   },
   goal_setting: {
-    label: TODO_STATUS_LABEL.goal_setting,
     category: "goal",
     categoryLabel: "目标",
     tone: PERFORMANCE_STATUS_TONES.goal_setting,
@@ -49,7 +37,6 @@ const TODO_META: Record<TodoType, TodoMeta> = {
     urgent: true,
   },
   goal_rejected: {
-    label: TODO_STATUS_LABEL.goal_rejected,
     category: "goal",
     categoryLabel: "目标",
     tone: PERFORMANCE_STATUS_TONES.goal_rejected,
@@ -57,7 +44,6 @@ const TODO_META: Record<TodoType, TodoMeta> = {
     urgent: true,
   },
   goal_pending_review: {
-    label: TODO_STATUS_LABEL.goal_pending_review,
     category: "acceptance",
     categoryLabel: "验收",
     tone: PERFORMANCE_STATUS_TONES.goal_pending_review,
@@ -65,7 +51,6 @@ const TODO_META: Record<TodoType, TodoMeta> = {
     urgent: true,
   },
   self_review: {
-    label: TODO_STATUS_LABEL.self_review,
     category: "self",
     categoryLabel: "自评",
     tone: PERFORMANCE_STATUS_TONES.self_review,
@@ -73,7 +58,6 @@ const TODO_META: Record<TodoType, TodoMeta> = {
     urgent: true,
   },
   manager_review: {
-    label: TODO_STATUS_LABEL.manager_review,
     category: "score",
     categoryLabel: "评分",
     tone: PERFORMANCE_STATUS_TONES.manager_review,
@@ -81,7 +65,6 @@ const TODO_META: Record<TodoType, TodoMeta> = {
     urgent: true,
   },
   dual_manager_review: {
-    label: TODO_STATUS_LABEL.dual_manager_review,
     category: "score",
     categoryLabel: "评分",
     tone: PERFORMANCE_STATUS_TONES.dual_manager_review,
@@ -89,23 +72,27 @@ const TODO_META: Record<TodoType, TodoMeta> = {
     urgent: true,
   },
   dotted_manager_review: {
-    label: TODO_STATUS_LABEL.dotted_manager_review,
     category: "score",
     categoryLabel: "评分",
     tone: PERFORMANCE_STATUS_TONES.dotted_manager_review,
     actionLabel: "去评分",
     urgent: true,
   },
+  plan_execution: {
+    category: "flow",
+    categoryLabel: "流程",
+    tone: PERFORMANCE_STATUS_TONES.plan_execution,
+    actionLabel: "去处理",
+    urgent: false,
+  },
   final_review: {
-    label: TODO_STATUS_LABEL.final_review,
-    category: "acceptance",
-    categoryLabel: "验收",
+    category: "flow",
+    categoryLabel: "流程",
     tone: PERFORMANCE_STATUS_TONES.final_review,
-    actionLabel: "去验收",
-    urgent: true,
+    actionLabel: "去校准",
+    urgent: false,
   },
   issued: {
-    label: TODO_STATUS_LABEL.issued,
     category: "acceptance",
     categoryLabel: "验收",
     tone: PERFORMANCE_STATUS_TONES.issued,
@@ -119,7 +106,11 @@ export function normalizeTodoType(type: TodoType): TodoType {
 }
 
 export function getTodoMeta(type: TodoType): TodoMeta {
-  return TODO_META[normalizeTodoType(type)];
+  const t = normalizeTodoType(type);
+  return {
+    ...TODO_META_CORE[type],
+    label: performanceStatusLabel(t as PerformanceStatus),
+  };
 }
 
 export function todoTone(type: TodoType): PerformanceStatusTone {
@@ -140,9 +131,12 @@ export function todoActionClass(type: TodoType): string {
   return statusToneActionClass(todoTone(type));
 }
 
-export type TodoBucket = "mine" | "team";
+export type TodoBucket = "mine" | "team" | "flow";
 
-/** 仅当「绩效主体员工本人」需要操作时，才归入「我的待办」；上级评分/目标验收/终审等不算员工本人待办。 */
+/** 创建人负责的流程节点（计划执行、待校准），单独成组且不计入角标。 */
+const TODO_CREATOR_FLOW_TYPES: ReadonlySet<TodoType> = new Set(["plan_execution", "final_review"]);
+
+/** 仅当「绩效主体员工本人」需要操作时，才归入「我的待办」。 */
 const TODO_EMPLOYEE_ACTS_ONLY: ReadonlySet<TodoType> = new Set([
   "goal_setting",
   "goal_rejected",
@@ -150,7 +144,15 @@ const TODO_EMPLOYEE_ACTS_ONLY: ReadonlySet<TodoType> = new Set([
   "issued",
 ]);
 
+/** 是否计入待办页/飞书应用角标的「待处理」数量。 */
+export function countsTowardTodoBadge(type: TodoType): boolean {
+  return !TODO_CREATOR_FLOW_TYPES.has(type);
+}
+
 export function todoBucket(type: TodoType, item?: TodoItem, userId?: string | null): TodoBucket {
+  if (TODO_CREATOR_FLOW_TYPES.has(type)) {
+    return "flow";
+  }
   if (!userId) {
     const category = getTodoMeta(type).category;
     return category === "self" || category === "goal" ? "mine" : "team";
@@ -171,12 +173,19 @@ export function todoBucket(type: TodoType, item?: TodoItem, userId?: string | nu
 export function groupTodosByBucket(
   items: TodoItem[],
   userId?: string | null,
-): { mine: TodoItem[]; team: TodoItem[] } {
+): { mine: TodoItem[]; team: TodoItem[]; flow: TodoItem[] } {
   const mine: TodoItem[] = [];
   const team: TodoItem[] = [];
+  const flow: TodoItem[] = [];
   for (const item of items) {
-    if (todoBucket(item.type, item, userId) === "mine") mine.push(item);
+    const bucket = todoBucket(item.type, item, userId);
+    if (bucket === "mine") mine.push(item);
+    else if (bucket === "flow") flow.push(item);
     else team.push(item);
   }
-  return { mine, team };
+  return { mine, team, flow };
+}
+
+export function countTodosForBadge(items: TodoItem[]): number {
+  return items.filter((item) => countsTowardTodoBadge(item.type)).length;
 }

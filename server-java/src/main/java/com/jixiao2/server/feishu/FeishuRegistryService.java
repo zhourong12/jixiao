@@ -82,7 +82,7 @@ public class FeishuRegistryService {
     return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
   }
 
-  /** 通讯录同步等：使用登录应用换 tenant token（与登录同一应用最常见）。 */
+  /** 登录应用（OAuth、工作台 H5、应用角标、JSSDK、通讯录）。 */
   public Optional<FeishuImAppRow> findDirectoryAppForSubjectId(String subjectId) {
     if (subjectId == null || subjectId.trim().isEmpty()) {
       return Optional.empty();

@@ -1,0 +1,22 @@
+# 测试环境（deploy/start-api-test.sh 使用 -Dspring.profiles.active=test 加载）
+server:
+  port: 8082
+
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/jixiao_test?characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: e+ZmCeLXY9UBqbbS
+
+jixiao2:
+  cors:
+    allowed-origin-patterns: https://test-kpi.ccka.com,http://test-kpi.ccka.com,http://localhost:*,http://127.0.0.1:*
+  session:
+    secret: jixiao2-test-session-secret
+  feishu:
+    redirect-uri: https://test-kpi.ccka.com/feishu-callback
+    notify-frontend-base-url: https://test-kpi.ccka.com
+
+logging:
+  file:
+    name: logs/jixiao2-server-test.log

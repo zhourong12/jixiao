@@ -70,7 +70,8 @@ async function save() {
   }
   saving.value = true;
   try {
-    const so = sortOrder.value.trim() ? parseInt(sortOrder.value, 10) : undefined;
+    const sortText = String(sortOrder.value ?? "").trim();
+    const so = sortText ? parseInt(sortText, 10) : undefined;
     if (editing.value) {
       await updateRbacRole(editing.value.roleKey, {
         name: n,
@@ -130,7 +131,24 @@ onMounted(() => void load());
     <p v-if="message && !dialogOpen" class="text-sm text-destructive">{{ message }}</p>
     <section class="ui-list-panel">
       <div v-if="loading" class="ui-loading">加载中...</div>
-      <div v-else class="ui-table-wrap">
+      <template v-else>
+        <div class="ui-mobile-cards">
+          <div v-for="row in items" :key="row.roleKey" class="ui-card flex items-start justify-between gap-3 p-4">
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-semibold">{{ row.name }}</span>
+                <span v-if="row.isSystem" class="rounded-full bg-accent px-2 py-0.5 text-xs text-accent-foreground">系统内置</span>
+              </div>
+              <p class="mt-1 font-mono text-xs text-muted-foreground">{{ row.roleKey }}</p>
+            </div>
+            <div class="flex shrink-0 gap-2">
+              <button type="button" class="text-sm text-primary hover:underline" @click="openEdit(row)">编辑</button>
+              <button v-if="!row.isSystem" type="button" class="text-sm text-destructive hover:underline" @click="remove(row)">删除</button>
+            </div>
+          </div>
+        </div>
+        <div class="ui-desktop-table">
+        <div class="ui-table-wrap">
         <table class="ui-table min-w-[640px]">
           <thead>
             <tr>
@@ -162,13 +180,15 @@ onMounted(() => void load());
           </tbody>
         </table>
       </div>
+        </div>
+      </template>
     </section>
     <div
       v-if="dialogOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="ui-dialog-backdrop"
       @click.self="dialogOpen = false"
     >
-      <div class="w-full max-w-md rounded-md border bg-card p-6 shadow-lg">
+      <div class="w-full max-w-md rounded-md border bg-card p-4 shadow-lg md:p-6">
         <h2 class="text-lg font-semibold">{{ editing ? "编辑角色" : "新建角色" }}</h2>
         <div class="mt-4 space-y-3">
           <div v-if="!editing">

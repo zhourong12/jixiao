@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import type {
   CreatePerformanceResponse,
   DepartmentOption,
@@ -7,7 +7,8 @@ import type {
   FeishuSubjectOption,
   ScoringScheme,
 } from "@/types/api.interface";
-import { createPerformance, getPerformanceMonthPeriods } from "@/api/performances";
+import { createPerformance, getDefaultNodeDeadlines, getPerformanceMonthPeriods } from "@/api/performances";
+import type { PerformanceNodeDeadlineKey } from "@/types/api.interface";
 import { getAllEmployees, getDepartmentOptions, getFeishuLoginSubjects } from "@/api/employees";
 import { listScoringSchemes } from "@/api/scoringSchemes";
 import AssessmentMonthPicker from "@/components/performance/AssessmentMonthPicker.vue";
@@ -35,6 +36,22 @@ const query = ref("");
 const result = ref<CreatePerformanceResponse | null>(null);
 const showResult = ref(false);
 const message = ref<string | null>(null);
+
+const NODE_DEADLINE_LABELS: { key: PerformanceNodeDeadlineKey; label: string }[] = [
+  { key: "goal", label: "目标设定及审核截止" },
+  { key: "scoring", label: "员工及上级评分截止" },
+  { key: "final", label: "绩效校准截止" },
+  { key: "confirm", label: "员工确认截止" },
+];
+
+const nodeDeadlines = ref<Partial<Record<PerformanceNodeDeadlineKey, string>>>({});
+
+watch(open, (isOpen) => {
+  document.body.style.overflow = isOpen ? "hidden" : "";
+});
+onUnmounted(() => {
+  document.body.style.overflow = "";
+});
 
 function matchesDept(emp: EmployeeDirectoryListItem, dept: DepartmentOption): boolean {
   const did = emp.departmentId?.trim();
@@ -145,6 +162,25 @@ watch(targetType, () => {
   selectedEmployees.value = [];
 });
 
+watch(period, async (p) => {
+  if (!p?.trim()) {
+    nodeDeadlines.value = {};
+    return;
+  }
+  try {
+    const res = await getDefaultNodeDeadlines(p);
+    const d = res.nodeDeadlines ?? {};
+    nodeDeadlines.value = {
+      goal: d.goal,
+      scoring: d.scoring,
+      final: d.final,
+      confirm: d.confirm,
+    };
+  } catch {
+    nodeDeadlines.value = {};
+  }
+});
+
 function resetForm() {
   targetType.value = "employee";
   selectedEmployees.value = [];
@@ -156,6 +192,7 @@ function resetForm() {
   result.value = null;
   showResult.value = false;
   message.value = null;
+  nodeDeadlines.value = {};
 }
 
 async function loadFeishuSubjects() {
@@ -258,6 +295,7 @@ async function submit() {
       period: period.value,
       scoringSchemeId: scoringSchemeId.value,
       subjectCode: subjectCode.value.trim(),
+      nodeDeadlines: { ...nodeDeadlines.value },
     });
     showResult.value = true;
   } catch (e) {
@@ -274,10 +312,9 @@ function finish() {
 </script>
 
 <template>
-  <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="close">
-    <div class="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-md border border-border bg-card p-6 shadow-sm">
+  <div v-if="open" class="ui-dialog-backdrop" @click.self="close">
+    <div class="ui-dialog-panel max-w-xl">
       <h2 class="text-lg font-semibold">创建绩效评估</h2>
-      <p v-if="message" class="mt-2 text-sm text-destructive">{{ message }}</p>
 
       <template v-if="showResult && result">
         <div class="mt-4 space-y-2 text-sm">
@@ -331,7 +368,7 @@ function finish() {
               class="mt-2 w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
               placeholder="搜索部门或成员姓名"
             />
-            <div class="mt-2 max-h-72 space-y-2 overflow-y-auto rounded-md border border-border p-2">
+            <div class="mt-2 max-h-36 space-y-2 overflow-y-auto rounded-md border border-border p-2 md:max-h-72">
               <details
                 v-for="dept in filteredDepartmentOptions"
                 :key="dept.id"
@@ -387,7 +424,7 @@ function finish() {
               class="mt-2 w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
               placeholder="搜索姓名或部门"
             />
-            <div class="mt-2 max-h-52 space-y-2 overflow-y-auto rounded-md border border-border p-3">
+            <div class="mt-2 max-h-36 space-y-2 overflow-y-auto rounded-md border border-border p-3 md:max-h-52">
               <label
                 v-for="emp in filteredEmployees"
                 :key="emp.userId"
@@ -409,6 +446,19 @@ function finish() {
           <label class="mt-4 block text-sm font-medium">考核月度</label>
           <AssessmentMonthPicker v-model="period" class="mt-1" :items="periods" :disabled="loading" />
 
+          <div v-if="period" class="mt-4 space-y-3 rounded-md border border-border p-3">
+            <p class="text-sm font-medium">节点截止时间</p>
+            <p class="text-xs text-muted-foreground">创建时写入每条绩效，详情页仅展示；可按需调整下列默认值。</p>
+            <div v-for="item in NODE_DEADLINE_LABELS" :key="item.key" class="grid grid-cols-1 gap-1 sm:grid-cols-[9rem_1fr] sm:items-center">
+              <label class="text-xs text-muted-foreground">{{ item.label }}</label>
+              <input
+                v-model="nodeDeadlines[item.key]"
+                type="date"
+                class="w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+
           <label class="mt-4 block text-sm font-medium">评分方案</label>
           <select v-model="scoringSchemeId" class="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm">
             <option value="">请选择评分方案</option>
@@ -424,6 +474,8 @@ function finish() {
           </p>
 
           <p class="mt-2 text-xs text-muted-foreground">将创建 {{ totalSelectedCount }} 名员工的绩效记录</p>
+
+          <p v-if="message" class="mt-3 text-sm text-destructive">{{ message }}</p>
 
           <div class="mt-6 flex justify-end gap-3">
             <button type="button" class="rounded-md border border-border px-4 py-2 text-sm" @click="close">取消</button>

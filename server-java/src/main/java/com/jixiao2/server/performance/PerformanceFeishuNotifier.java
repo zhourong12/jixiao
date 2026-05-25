@@ -32,18 +32,24 @@ public class PerformanceFeishuNotifier {
   private final Jixiao2Properties properties;
   private final FeishuEmployeeMessagingService feishuEmployeeMessaging;
   private final PerformanceFeishuTaskService performanceFeishuTaskService;
+  private final PerformanceNodeDeadlineService nodeDeadlineService;
+  private final PerformanceFeishuLogNames logNames;
 
   public PerformanceFeishuNotifier(
       JdbcTemplate jdbc,
       FeishuImService feishuImService,
       Jixiao2Properties properties,
       FeishuEmployeeMessagingService feishuEmployeeMessaging,
-      PerformanceFeishuTaskService performanceFeishuTaskService) {
+      PerformanceFeishuTaskService performanceFeishuTaskService,
+      PerformanceNodeDeadlineService nodeDeadlineService,
+      PerformanceFeishuLogNames logNames) {
     this.jdbc = jdbc;
     this.feishuImService = feishuImService;
     this.properties = properties;
     this.feishuEmployeeMessaging = feishuEmployeeMessaging;
     this.performanceFeishuTaskService = performanceFeishuTaskService;
+    this.nodeDeadlineService = nodeDeadlineService;
+    this.logNames = logNames;
   }
 
   /**
@@ -229,6 +235,8 @@ public class PerformanceFeishuNotifier {
         return "待审核目标";
       case "goal_rejected":
         return "目标被驳回";
+      case "plan_execution":
+        return "计划执行中";
       case "self_review":
         return "自评中";
       case "manager_review":
@@ -309,52 +317,71 @@ public class PerformanceFeishuNotifier {
    */
   private void sendOne(
       String employeeId, String title, String textWithoutUrl, String recordIdForTask, String nodeKeyForTask) {
+    String empId = employeeId == null ? "" : employeeId.trim();
+    String nodeKey = PerformanceFeishuLogNames.nodeKeyLabel(nodeKeyForTask);
     String block = perfNotifyBlockReason();
     if (block != null) {
       log.info(
-          "绩效飞书通知跳过 title={} reason={} employeeId={}",
+          "绩效飞书通知跳过 nodeKey={} title={} reason={} {}",
+          nodeKey,
           title,
           block,
-          employeeId == null ? "" : employeeId.trim());
+          logNames.assignee(empId));
       return;
     }
-    if (employeeId == null || employeeId.trim().isEmpty()) {
-      log.warn("绩效飞书通知跳过 title={} reason=接收人员工 ID 为空", title);
+    if (empId.isEmpty()) {
+      log.warn("绩效飞书通知跳过 nodeKey={} title={} reason=接收人员工 ID 为空", nodeKey, title);
       return;
     }
     Optional<FeishuEmployeeMessagingService.FeishuMessagingContext> opt =
-        feishuEmployeeMessaging.resolveForEmployeeId(employeeId.trim());
+        feishuEmployeeMessaging.resolveForEmployeeId(empId);
     final FeishuEmployeeMessagingService.FeishuMessagingContext ctx =
         opt.orElseGet(() -> FeishuEmployeeMessagingService.FeishuMessagingContext.skipped("无员工上下文"));
     if (!ctx.isOk()) {
       log.info(
-          "绩效飞书通知跳过 title={} reason={} employeeId={}",
+          "绩效飞书通知跳过 nodeKey={} title={} reason={} {}",
+          nodeKey,
           title,
           ctx.getSkipReason(),
-          employeeId.trim());
+          logNames.assignee(empId));
       return;
     }
     if (!ctx.isSubjectPerformanceNotifyEnabled()) {
       log.info(
-          "绩效飞书通知跳过 title={} reason=该主体已关闭绩效自动通知 employeeId={} subjectPerformanceNotifyEnabled=false",
+          "绩效飞书通知跳过 nodeKey={} title={} reason=该主体已关闭绩效自动通知 {}",
+          nodeKey,
           title,
-          employeeId.trim());
+          logNames.assignee(empId));
       return;
     }
     String rid = ctx.getReceiveOpenId();
     if (rid == null || rid.trim().isEmpty()) {
-      log.warn("绩效飞书通知跳过 title={} reason=接收人 open_id 为空 employeeId={}", title, employeeId.trim());
+      log.warn(
+          "绩效飞书通知跳过 nodeKey={} title={} reason=接收人 open_id 为空 {}",
+          nodeKey,
+          title,
+          logNames.assignee(empId));
       return;
     }
     try {
-      String token = feishuImService.fetchTenantAccessToken(ctx.getImAppId(), ctx.getImAppSecret());
       String entrance = effectiveNotifyEntranceUrl(ctx);
       Map<String, Object> card = buildPerformanceTodoCard(textWithoutUrl, entrance);
-      String err = feishuImService.sendInteractiveCard(token, rid.trim(), card);
+      String err =
+          feishuImService.sendInteractiveCardWithRetry(
+              ctx.getImAppId(), ctx.getImAppSecret(), rid.trim(), card);
       if (err != null) {
-        log.warn("绩效飞书通知失败 receiveId(open_id)={} title={} err={}", rid, title, err);
+        log.warn(
+            "绩效飞书通知失败 nodeKey={} title={} err={} {}",
+            nodeKey,
+            title,
+            err,
+            logNames.recipient(empId, rid));
       } else {
-        log.info("绩效飞书通知已发送(interactive) receiveId(open_id)={} title={}", rid, title);
+        log.info(
+            "绩效飞书通知已发送(interactive) nodeKey={} title={} {}",
+            nodeKey,
+            title,
+            logNames.recipient(empId, rid));
       }
       if (recordIdForTask != null
           && nodeKeyForTask != null
@@ -363,27 +390,37 @@ public class PerformanceFeishuNotifier {
         try {
           performanceFeishuTaskService.createAfterImSuccess(
               ctx,
-              token,
               rid.trim(),
-              employeeId.trim(),
+              empId,
               recordIdForTask.trim(),
               nodeKeyForTask.trim(),
               title,
               textWithoutUrl,
               entrance);
         } catch (Exception te) {
-          log.warn("绩效飞书待办创建异常 recordId={} nodeKey={}", recordIdForTask, nodeKeyForTask, te);
+          log.warn(
+              "绩效飞书待办创建异常 recordId={} nodeKey={} {}",
+              recordIdForTask,
+              nodeKeyForTask,
+              logNames.assignee(empId),
+              te);
         }
       }
     } catch (ResponseStatusException e) {
       log.warn(
-          "绩效飞书通知失败(换 tenant token) receiveId(open_id)={} title={} httpStatus={} reason={}",
-          rid,
+          "绩效飞书通知失败(换 tenant token) nodeKey={} title={} httpStatus={} reason={} {}",
+          nodeKey,
           title,
           e.getStatus(),
-          e.getReason());
+          e.getReason(),
+          logNames.recipient(empId, rid));
     } catch (Exception e) {
-      log.warn("绩效飞书通知异常 receiveId(open_id)={} title={}", rid, title, e);
+      log.warn(
+          "绩效飞书通知异常 nodeKey={} title={} {}",
+          nodeKey,
+          title,
+          logNames.recipient(empId, rid),
+          e);
     }
   }
 
@@ -419,32 +456,160 @@ public class PerformanceFeishuNotifier {
   }
 
   public void notifyRecordCreated(String employeeId, String recordId, String period) {
+    notifyRecordCreated(employeeId, recordId, period, null);
+  }
+
+  public void notifyRecordCreated(
+      String employeeId, String recordId, String period, String nodeDeadlinesJson) {
     log.info(
-        "绩效创建飞书通知入口 employeeId={} recordId={} period={} notifyEnabled={}",
-        employeeId,
+        "绩效创建飞书通知入口 nodeKey=goal {} recordId={} period={} notifyEnabled={}",
+        logNames.assignee(employeeId),
         recordId,
         period,
         properties.getFeishu().isPerformanceNotifyEnabled());
     String title = "【绩效】您有新的绩效待办";
     Map<String, Object> row = new LinkedHashMap<String, Object>();
     row.put("period", period);
-    String body =
-        buildTodoBodyLeadPeriodRecordCta("已为您创建绩效。", row, recordId, "请设置目标设定。");
+    Map<String, String> deadlines = nodeDeadlineService.parseJson(nodeDeadlinesJson);
+    if (deadlines.isEmpty()) {
+      deadlines = nodeDeadlineService.defaultDeadlinesForPeriod(period);
+    }
+    String cta = formatSingleNodeDeadlineMarkdown(deadlines, "goal") + "\n\n请设置目标设定。";
+    String body = buildTodoBodyLeadPeriodRecordCta("已为您创建绩效。", row, recordId, cta);
     sendOne(employeeId, title, body, recordId, "goal");
+  }
+
+  /** 节点截止日当天提醒（卡片样式与创建绩效一致）。 */
+  public void notifyDeadlineReminder(
+      String employeeId,
+      Map<String, Object> recordRow,
+      String recordId,
+      String nodeKeyForTask,
+      String lead,
+      String cta,
+      boolean includeEmployeeLine) {
+    String title = "【绩效】节点截止提醒";
+    String body =
+        includeEmployeeLine
+            ? buildTodoBodyLeadPeriodRecordEmployeeCta(lead, recordRow, recordId, cta)
+            : buildTodoBodyLeadPeriodRecordCta(lead, recordRow, recordId, cta);
+    sendOne(employeeId, title, body, recordId, nodeKeyForTask);
+  }
+
+  public void notifyDeadlineReminderDistinct(
+      Iterable<String> employeeIds,
+      Map<String, Object> recordRow,
+      String recordId,
+      String nodeKeyForTask,
+      String lead,
+      String cta,
+      boolean includeEmployeeLine) {
+    String title = "【绩效】节点截止提醒";
+    String body =
+        includeEmployeeLine
+            ? buildTodoBodyLeadPeriodRecordEmployeeCta(lead, recordRow, recordId, cta)
+            : buildTodoBodyLeadPeriodRecordCta(lead, recordRow, recordId, cta);
+    sendDistinct(employeeIds, title, body, recordId, nodeKeyForTask);
+  }
+
+  private Map<String, String> deadlinesFromRecordRow(Map<String, Object> r) {
+    Object raw = r == null ? null : r.get("nodeDeadlines");
+    Map<String, String> deadlines;
+    if (raw instanceof String) {
+      deadlines = nodeDeadlineService.parseJson((String) raw);
+    } else {
+      deadlines = new LinkedHashMap<String, String>();
+    }
+    if (deadlines.isEmpty() && r != null && r.get("period") != null) {
+      String period = String.valueOf(r.get("period")).trim();
+      if (!period.isEmpty()) {
+        deadlines = nodeDeadlineService.defaultDeadlinesForPeriod(period);
+      }
+    }
+    return deadlines;
+  }
+
+  private String ctaWithNodeDeadline(Map<String, Object> r, String nodeKey, String actionLine) {
+    String deadline = formatSingleNodeDeadlineMarkdown(deadlinesFromRecordRow(r), nodeKey);
+    if (deadline.isEmpty()) {
+      return actionLine;
+    }
+    return deadline + "\n\n" + actionLine;
+  }
+
+  private String ctaWithStatusDeadline(Map<String, Object> r, String status, String actionLine) {
+    String nk = PerformanceFeishuTaskService.statusToNodeKey(status);
+    if (nk == null || nk.isEmpty()) {
+      return actionLine;
+    }
+    return ctaWithNodeDeadline(r, nk, actionLine);
+  }
+
+  private static String resolveCalibrationOwnerId(Map<String, Object> r) {
+    if (r == null) {
+      return "";
+    }
+    String owner =
+        r.get("calibrationOwnerId") == null ? "" : String.valueOf(r.get("calibrationOwnerId")).trim();
+    if (!owner.isEmpty()) {
+      return owner;
+    }
+    return r.get("createdBy") == null ? "" : String.valueOf(r.get("createdBy")).trim();
+  }
+
+  /** 飞书卡片仅展示与当前待办节点对应的截止日（nodeKey 与 {@link PerformanceFeishuTaskService#statusToNodeKey} 一致）。 */
+  private static String formatSingleNodeDeadlineMarkdown(Map<String, String> deadlines, String nodeKey) {
+    if (deadlines == null || deadlines.isEmpty() || nodeKey == null || nodeKey.trim().isEmpty()) {
+      return "";
+    }
+    String deadlineKey = deadlineStorageKeyForNode(nodeKey.trim());
+    if (deadlineKey == null) {
+      return "";
+    }
+    String date = deadlines.get(deadlineKey);
+    if (date == null || date.trim().isEmpty()) {
+      return "";
+    }
+    return "截至时间：" + deadlineMarkdownRed(date.trim());
+  }
+
+  private static String deadlineStorageKeyForNode(String nodeKey) {
+    switch (nodeKey) {
+      case "goal":
+      case "goal_review":
+      case "plan":
+        return PerformanceNodeDeadlineService.KEY_GOAL;
+      case "self":
+      case "manager":
+        return PerformanceNodeDeadlineService.KEY_SCORING;
+      case "final":
+        return PerformanceNodeDeadlineService.KEY_FINAL;
+      case "confirm":
+        return PerformanceNodeDeadlineService.KEY_CONFIRM;
+      default:
+        return null;
+    }
+  }
+
+  private static String deadlineMarkdownRed(String isoDate) {
+    return "<font color='#DC2626'>" + isoDate + "</font>";
   }
 
   /** 选择模板后不再推送飞书（与创建绩效、目标审核等节点区分）。 */
   public void notifySelectTemplate(String employeeId, String recordId, String period) {
     log.info(
-        "绩效飞书通知已跳过（选择模板节点不推送） employeeId={} recordId={} period={}",
-        employeeId,
+        "绩效飞书通知已跳过（选择模板节点不推送） nodeKey=template {} recordId={} period={}",
+        logNames.assignee(employeeId),
         recordId,
         period);
   }
 
   public void notifyGoalPendingReview(Map<String, Object> r, String recordId) {
     String mgr = r.get("managerId") == null ? null : String.valueOf(r.get("managerId"));
-    String dot = r.get("dottedManagerId") == null ? null : String.valueOf(r.get("dottedManagerId"));
+    if (mgr == null || mgr.isEmpty()) {
+      log.info("绩效待审核目标无直属上级，跳过飞书通知 recordId={}", recordId);
+      return;
+    }
     String title = "【绩效】待审核目标设定";
     String body =
         buildTodoBodyLeadPeriodRecordEmployeeCta(
@@ -453,15 +618,8 @@ public class PerformanceFeishuNotifier {
                 + "。",
             r,
             recordId,
-            "请您在系统中尽快通过或驳回。");
-    List<String> to = new ArrayList<String>();
-    if (mgr != null && !mgr.isEmpty()) {
-      to.add(mgr);
-    }
-    if (dot != null && !dot.isEmpty()) {
-      to.add(dot);
-    }
-    sendDistinct(to, title, body, recordId, "goal_review");
+            ctaWithNodeDeadline(r, "goal_review", "请您在系统中尽快通过或驳回。"));
+    sendOne(mgr, title, body, recordId, "goal_review");
   }
 
   public void notifySelfSubmitted(Map<String, Object> r, String recordId, String newStatus) {
@@ -473,7 +631,7 @@ public class PerformanceFeishuNotifier {
             "员工已提交自评。当前流程状态：" + performanceStatusLabelZh(newStatus) + "。",
             r,
             recordId,
-            "请您登录系统完成上级评分。");
+            ctaWithNodeDeadline(r, "manager", "请您登录系统完成上级评分。"));
     List<String> to = new ArrayList<String>();
     if ("manager_review".equals(newStatus) && mgr != null && !mgr.isEmpty()) {
       to.add(mgr);
@@ -488,22 +646,13 @@ public class PerformanceFeishuNotifier {
     sendDistinct(to, title, body, recordId, "manager");
   }
 
+  /** 进入「待校准」不向校准负责人推送飞书（与目标通过进入计划执行一致）。 */
   public void notifyFinalReviewAdmins(Map<String, Object> r, String recordId) {
-    List<String> admins = listUserIdsWithMenuAllowed("performance_review_admin");
-    if (admins.isEmpty()) {
-      log.info("绩效进入终审但无 performance_review_admin 用户，跳过飞书通知 recordId={}", recordId);
-      return;
-    }
-    String title = "【绩效】待终审";
-    String body =
-        buildTodoBodyLeadPeriodRecordEmployeeCta(
-            "有待您处理的绩效终审。当前流程状态："
-                + performanceStatusLabelZh("final_review")
-                + "。",
-            r,
-            recordId,
-            "请您在管理端完成终审（通过/退回并填写原因）。");
-    sendDistinct(admins, title, body, recordId, "final");
+    String owner = resolveCalibrationOwnerId(r);
+    log.info(
+        "绩效飞书通知已跳过（待校准不通知校准负责人） recordId={} {}",
+        recordId,
+        owner.isEmpty() ? "" : logNames.assignee(owner));
   }
 
   /**
@@ -527,7 +676,7 @@ public class PerformanceFeishuNotifier {
                   + "。",
               r,
               recordId,
-              "请您尽快完成虚线上级评分。");
+              ctaWithNodeDeadline(r, "manager", "请您尽快完成虚线上级评分。"));
       sendOne(dot, title, body, recordId, "manager");
       return;
     }
@@ -541,7 +690,8 @@ public class PerformanceFeishuNotifier {
                     + "。",
                 r,
                 recordId,
-                "请您继续完成虚线上级侧评审（若尚未完成）。");
+                ctaWithNodeDeadline(
+                    r, "manager", "请您继续完成虚线上级侧评审（若尚未完成）。"));
         sendOne(dot, title, body, recordId, "manager");
       }
     }
@@ -567,39 +717,36 @@ public class PerformanceFeishuNotifier {
                     + "。",
                 r,
                 recordId,
-                "请您继续完成直属上级侧评审（若尚未完成）。");
+                ctaWithNodeDeadline(
+                    r, "manager", "请您继续完成直属上级侧评审（若尚未完成）。"));
         sendOne(mgr, title, body, recordId, "manager");
       }
     }
   }
 
+  /** 目标审核通过进入「计划执行中」不推送飞书；驳回仍通知员工修改目标。 */
   public void notifyApproveGoal(
       Map<String, Object> r, String recordId, boolean approved, String rejectionReason) {
-    String emp = String.valueOf(r.get("employeeId"));
-    String title =
-        approved ? "【绩效】目标设定已通过" : "【绩效】驳回待目标设定";
-    String body;
     if (approved) {
-      body =
-          buildTodoBodyLeadPeriodRecordCta(
-              "您的目标设定已通过上级审核。当前流程状态："
-                  + performanceStatusLabelZh("self_review")
-                  + "。",
-              r,
-              recordId,
-              "请进行「自评」并提交。");
-    } else {
-      String reason = rejectionReason == null ? "" : rejectionReason;
-      body =
-          buildTodoBodyLeadPeriodRecordCta(
-              "您的目标设定未通过审核。当前流程状态："
-                  + performanceStatusLabelZh("goal_rejected")
-                  + "。",
-              r,
-              recordId,
-              "原因：" + reason + "\n\n请根据反馈修改后重新提交目标。");
+      log.info(
+          "绩效飞书通知已跳过（目标审核通过进入计划执行不推送） recordId={} {}",
+          recordId,
+          logNames.assignee(String.valueOf(r.get("employeeId"))));
+      return;
     }
-    sendOne(emp, title, body, recordId, approved ? "self" : "goal");
+    String emp = String.valueOf(r.get("employeeId"));
+    String title = "【绩效】驳回待目标设定";
+    String reason = rejectionReason == null ? "" : rejectionReason;
+    String body =
+        buildTodoBodyLeadPeriodRecordCta(
+            "您的目标设定未通过审核。当前流程状态："
+                + performanceStatusLabelZh("goal_rejected")
+                + "。",
+            r,
+            recordId,
+            ctaWithNodeDeadline(
+                r, "goal", "原因：" + reason + "\n\n请根据反馈修改后重新提交目标。"));
+    sendOne(emp, title, body, recordId, "goal");
   }
 
   public void notifyRejectToEmployee(Map<String, Object> r, String recordId, String reason) {
@@ -612,7 +759,10 @@ public class PerformanceFeishuNotifier {
                 + "」。请修改自评后重新提交。",
             r,
             recordId,
-            "原因：" + (reason == null ? "" : reason) + "\n\n请登录系统查看并修改后重新提交自评。");
+            ctaWithNodeDeadline(
+                r,
+                "self",
+                "原因：" + (reason == null ? "" : reason) + "\n\n请登录系统查看并修改后重新提交自评。"));
     sendOne(emp, title, body, recordId, "self");
   }
 
@@ -635,7 +785,12 @@ public class PerformanceFeishuNotifier {
               "终审未通过，流程已退回至：" + performanceStatusLabelZh(newStatus) + "。",
               r,
               recordId,
-              "原因：" + (rejectionReason == null ? "" : rejectionReason) + "\n\n请登录系统查看详情并处理。");
+              ctaWithStatusDeadline(
+                  r,
+                  newStatus,
+                  "原因："
+                      + (rejectionReason == null ? "" : rejectionReason)
+                      + "\n\n请登录系统查看详情并处理。"));
       String nk = PerformanceFeishuTaskService.statusToNodeKey(newStatus);
       sendOne(emp, title, body, recordId, nk == null ? "" : nk);
     }
@@ -651,7 +806,7 @@ public class PerformanceFeishuNotifier {
               "绩效校准已完成，结果已下发。当前流程状态：" + performanceStatusLabelZh("issued") + "。",
               r,
               recordId,
-              "请登录系统查看绩效结果并确认。");
+              ctaWithNodeDeadline(r, "confirm", "请登录系统查看绩效结果并确认。"));
       sendOne(emp, title, body, recordId, "confirm");
     } else {
       String title = "【绩效】校准退回";
@@ -660,7 +815,12 @@ public class PerformanceFeishuNotifier {
               "绩效校准未通过，流程已退回至：" + performanceStatusLabelZh(newStatus) + "。",
               r,
               recordId,
-              "原因：" + (rejectionReason == null ? "" : rejectionReason) + "\n\n请登录系统查看并处理。");
+              ctaWithStatusDeadline(
+                  r,
+                  newStatus,
+                  "原因："
+                      + (rejectionReason == null ? "" : rejectionReason)
+                      + "\n\n请登录系统查看并处理。"));
       String nk = PerformanceFeishuTaskService.statusToNodeKey(newStatus);
       sendOne(emp, title, body, recordId, nk == null ? "" : nk);
     }

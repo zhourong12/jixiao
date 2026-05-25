@@ -1,6 +1,5 @@
 package com.jixiao2.server.home;
 
-import com.jixiao2.server.employee.EmployeeService;
 import com.jixiao2.server.menu.MenuPermissionService;
 import java.sql.Timestamp;
 import java.time.LocalDate;
@@ -17,27 +16,10 @@ public class HomeService {
 
   private final JdbcTemplate jdbc;
   private final MenuPermissionService menuPermissionService;
-  private final EmployeeService employeeService;
 
-  public HomeService(
-      JdbcTemplate jdbc, MenuPermissionService menuPermissionService, EmployeeService employeeService) {
+  public HomeService(JdbcTemplate jdbc, MenuPermissionService menuPermissionService) {
     this.jdbc = jdbc;
     this.menuPermissionService = menuPermissionService;
-    this.employeeService = employeeService;
-  }
-
-  /** 与绩效终审/校准能力一致：可看到「待终审」类待办的用户（非全员绩效列表）。 */
-  private boolean canSeeFinalReviewTodos(String userId, String role) {
-    if (userId == null || userId.isEmpty()) {
-      return false;
-    }
-    if ("super_admin".equals(role)) {
-      return true;
-    }
-    if (menuPermissionService.isMenuAllowed(userId, "performance_review_admin")) {
-      return true;
-    }
-    return employeeService.readCalibrationAssigneeEmployeeIds().contains(userId);
   }
 
   private static int[] resolveYearMonth(Integer year, Integer month) {
@@ -55,6 +37,28 @@ public class HomeService {
     return Timestamp.valueOf(YearMonth.of(year, month).plusMonths(1).atDay(1).atStartOfDay());
   }
 
+  /** 待办条数（用于飞书应用角标）；不含创建人负责的 plan_execution / final_review。 */
+  public int countTodos(String userId, Integer year, Integer month) {
+    if (userId == null || userId.trim().isEmpty()) {
+      return 0;
+    }
+    int[] ym = resolveYearMonth(year, month);
+    Timestamp start = monthStart(ym[0], ym[1]);
+    Timestamp endEx = monthEndExclusive(ym[0], ym[1]);
+    String role = menuPermissionService.getUserRole(userId);
+
+    List<Object> args = new ArrayList<Object>();
+    List<String> whereParts = buildTodoWhereParts(userId.trim(), role, args, false);
+    String sql =
+        "SELECT COUNT(*) FROM performance_record pr WHERE ("
+            + String.join(" OR ", whereParts)
+            + ") AND pr.deleted_at IS NULL AND pr._updated_at >= ? AND pr._updated_at < ?";
+    args.add(start);
+    args.add(endEx);
+    Integer n = jdbc.queryForObject(sql, Integer.class, args.toArray());
+    return n == null ? 0 : n;
+  }
+
   public Map<String, Object> getTodos(String userId, Integer year, Integer month) {
     int[] ym = resolveYearMonth(year, month);
     Timestamp start = monthStart(ym[0], ym[1]);
@@ -62,35 +66,7 @@ public class HomeService {
     String role = menuPermissionService.getUserRole(userId);
 
     List<Object> args = new ArrayList<Object>();
-    List<String> whereParts = new ArrayList<String>();
-    whereParts.add(
-        "((pr.status IN ('template_selection','goal_setting') AND pr.employee_id=?) OR (pr.status=? AND pr.employee_id=?) OR "
-            + "(pr.status=? AND (pr.manager_id=? OR pr.dotted_manager_id=?)) OR "
-            + "(pr.status=? AND pr.employee_id=?) OR (pr.status=? AND pr.manager_id=?) OR "
-            + "(pr.status=? AND (pr.manager_id=? OR pr.dotted_manager_id=?)) OR "
-            + "(pr.status=? AND pr.dotted_manager_id=?) OR "
-            + "(pr.status=? AND pr.employee_id=?))");
-    args.add(userId);
-    args.add("goal_rejected");
-    args.add(userId);
-    args.add("goal_pending_review");
-    args.add(userId);
-    args.add(userId);
-    args.add("self_review");
-    args.add(userId);
-    args.add("manager_review");
-    args.add(userId);
-    args.add("dual_manager_review");
-    args.add(userId);
-    args.add(userId);
-    args.add("dotted_manager_review");
-    args.add(userId);
-    args.add("issued");
-    args.add(userId);
-    if (canSeeFinalReviewTodos(userId, role)) {
-      whereParts.add("(pr.status='final_review')");
-    }
-
+    List<String> whereParts = buildTodoWhereParts(userId, role, args, true);
     StringBuilder sqlBuilder = new StringBuilder();
     sqlBuilder.append(
         "SELECT pr.id, pr.period, pr.status, pr.employee_id, eh.name AS employee_name, eh.department_name FROM performance_record pr "
@@ -144,6 +120,44 @@ public class HomeService {
     return out;
   }
 
+  /**
+   * @param includeCreatorManage 为 true 时包含创建人负责的 plan_execution / final_review（仅列表，不计角标）
+   */
+  private List<String> buildTodoWhereParts(
+      String userId, String role, List<Object> args, boolean includeCreatorManage) {
+    List<String> whereParts = new ArrayList<String>();
+    whereParts.add(
+        "((pr.status IN ('template_selection','goal_setting') AND pr.employee_id=?) OR (pr.status=? AND pr.employee_id=?) OR "
+            + "(pr.status=? AND pr.manager_id=?) OR "
+            + "(pr.status=? AND pr.employee_id=?) OR (pr.status=? AND pr.manager_id=?) OR "
+            + "(pr.status=? AND (pr.manager_id=? OR pr.dotted_manager_id=?)) OR "
+            + "(pr.status=? AND pr.dotted_manager_id=?) OR "
+            + "(pr.status=? AND pr.employee_id=?))");
+    args.add(userId);
+    args.add("goal_rejected");
+    args.add(userId);
+    args.add("goal_pending_review");
+    args.add(userId);
+    args.add("self_review");
+    args.add(userId);
+    args.add("manager_review");
+    args.add(userId);
+    args.add("dual_manager_review");
+    args.add(userId);
+    args.add(userId);
+    args.add("dotted_manager_review");
+    args.add(userId);
+    args.add("issued");
+    args.add(userId);
+    if (includeCreatorManage) {
+      whereParts.add(
+          "((pr.status IN ('plan_execution','final_review')) AND (pr.calibration_owner_id=? OR pr._created_by=?))");
+      args.add(userId);
+      args.add(userId);
+    }
+    return whereParts;
+  }
+
   private static String mapTodoType(String status) {
     if ("template_selection".equals(status) || "goal_setting".equals(status)) {
       return "goal_setting";
@@ -165,6 +179,9 @@ public class HomeService {
     }
     if ("dotted_manager_review".equals(status)) {
       return "dotted_manager_review";
+    }
+    if ("plan_execution".equals(status)) {
+      return "plan_execution";
     }
     if ("final_review".equals(status)) {
       return "final_review";
@@ -199,8 +216,11 @@ public class HomeService {
     if ("dotted_manager_review".equals(status)) {
       return who + "虚线上级评分";
     }
+    if ("plan_execution".equals(status)) {
+      return who + "计划执行中";
+    }
     if ("final_review".equals(status)) {
-      return who + "待终审/校准";
+      return who + "待绩效校准";
     }
     if ("issued".equals(status)) {
       return who + "绩效结果待确认";

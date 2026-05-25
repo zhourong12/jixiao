@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const cookieH = { key: 'Cookie', value: 'jx_session={{jx_session}}' };
+const bearerH = { key: 'Authorization', value: 'Bearer {{api_token}}' };
 const jsonH = { key: 'Content-Type', value: 'application/json' };
 
 /** 字符串 URL 便于 Newman 解析；query 拼进 raw */
@@ -39,7 +40,11 @@ const http2xxTests = {
 };
 
 function req(name, method, path, opts = {}) {
-  const headers = [...(opts.noAuth ? [] : [cookieH]), ...(opts.json || opts.body !== undefined ? [jsonH] : [])];
+  const headers = [
+    ...(opts.noAuth ? [] : [cookieH]),
+    ...(opts.bearer ? [bearerH] : []),
+    ...(opts.json || opts.body !== undefined ? [jsonH] : []),
+  ];
   const item = {
     name,
     request: {
@@ -214,6 +219,36 @@ const saveAwardIdTests = {
   },
 };
 
+const saveApiTokenTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  if (j.token) setVar("api_token", j.token);',
+      '} catch (e) {}',
+    ],
+    type: 'text/javascript',
+  },
+};
+
+const saveApiTokenIdTests = {
+  listen: 'test',
+  script: {
+    exec: [
+      ...setVarLines,
+      'try {',
+      '  const j = pm.response.json();',
+      '  const items = j.items || (j.data && j.data.items) || [];',
+      '  const hit = items.find((r) => r && r.name === "Newman API Token");',
+      '  if (hit && hit.id) setVar("api_token_id", hit.id);',
+      '} catch (e) {}',
+    ],
+    type: 'text/javascript',
+  },
+};
+
 const DEMO_GOALS = [
   { indicatorName: '业绩目标', target: 'T1', weight: 40 },
   { indicatorName: '团队协作', target: 'T2', weight: 30 },
@@ -265,6 +300,8 @@ const collection = {
     { key: 'newman_eval_quarter_id', value: '' },
     { key: 'newman_feishu_subject_code', value: 'default' },
     { key: 'newman_feishu_open_id', value: 'ou_newman_placeholder' },
+    { key: 'api_token', value: '' },
+    { key: 'api_token_id', value: '' },
   ],
   item: [
     {
@@ -365,6 +402,24 @@ const collection = {
       ],
     },
     {
+      name: '03b API Tokens',
+      item: [
+        req('GET api tokens', 'GET', 'api/admin/api-tokens', { events: [saveApiTokenIdTests] }),
+        req('POST api token', 'POST', 'api/admin/api-tokens', {
+          json: true,
+          body: { name: 'Newman API Token', expiresAt: null },
+          events: [saveApiTokenTests],
+        }),
+        req('GET session me (Bearer)', 'GET', 'api/session/me', {
+          events: [http2xxTests],
+          noAuth: true,
+          bearer: true,
+        }),
+        req('GET api tokens after create', 'GET', 'api/admin/api-tokens', { events: [saveApiTokenIdTests] }),
+        req('DELETE api token', 'DELETE', 'api/admin/api-tokens/{{api_token_id}}'),
+      ],
+    },
+    {
       name: '04 Employees',
       item: [
         req('GET employees', 'GET', 'api/employees', {
@@ -394,6 +449,11 @@ const collection = {
           },
         }),
         req('POST admin departments sync', 'POST', 'api/admin/departments/sync-from-employees'),
+        req('GET admin auth-config', 'GET', 'api/admin/auth-config'),
+        req('PATCH admin auth-config', 'PATCH', 'api/admin/auth-config', {
+          json: true,
+          body: { passwordLoginEnabled: true },
+        }),
         req('GET employees role-options', 'GET', 'api/employees/role-options'),
         req('GET employees feishu-user-options', 'GET', 'api/employees/feishu-user-options', {
           query: [['subjectCode', '{{newman_feishu_subject_code}}']],
@@ -433,6 +493,10 @@ const collection = {
         req('POST employees sync-from-lark', 'POST', 'api/employees/sync-from-lark', {
           json: true,
           body: { clearExisting: false, subjectCode: '{{newman_feishu_subject_code}}' },
+        }),
+        req('POST employees sync-from-feishu', 'POST', 'api/employees/sync-from-feishu', {
+          json: true,
+          body: {},
         }),
       ],
     },
@@ -513,6 +577,11 @@ const collection = {
           skipAssert: true,
         }),
         loginAs('Login as super admin', 'zhou_rong'),
+        req('POST performances ops reject-self-review', 'POST', 'api/performances/ops/reject-self-review', {
+          json: true,
+          body: { recordId: '{{performance_id}}', reason: 'newman admin reject' },
+          skipAssert: true,
+        }),
         req('POST performances calibrate', 'POST', 'api/performances/{{performance_id}}/calibrate', {
           json: true,
           body: { approved: true, finalScore: 4.2 },
@@ -594,10 +663,23 @@ const collection = {
           json: true,
           body: { configs: [{ key: 'manager_review_weight', value: '0.7' }] },
         }),
+        req('GET platform-settings', 'GET', 'api/admin/platform-settings'),
+        req('PATCH platform-settings', 'PATCH', 'api/admin/platform-settings', {
+          json: true,
+          body: { appBadgeEnabled: true, feishuTaskEnabled: true, passwordLoginEnabled: false },
+        }),
         req('GET performance-feishu-task-config', 'GET', 'api/admin/performance-feishu-task-config'),
         req('PATCH performance-feishu-task-config', 'PATCH', 'api/admin/performance-feishu-task-config', {
           json: true,
           body: { enabled: true, items: [{ nodeKey: 'goal', dueDays: 7 }] },
+        }),
+        req('GET feishu app-badge-enabled', 'GET', 'api/feishu/app-badge/enabled'),
+        req('GET feishu jssdk-config', 'GET', 'api/feishu/jssdk-config', {
+          query: [['url', 'http://127.0.0.1:5174/todo']],
+        }),
+        req('POST feishu app-badge-sync', 'POST', 'api/feishu/app-badge/sync'),
+        req('POST feishu badge-client-log', 'POST', 'api/feishu/badge-client-log', {
+          body: { lines: ['[feishu-badge] newman test'] },
         }),
       ],
     },

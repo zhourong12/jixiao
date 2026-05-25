@@ -1,0 +1,10 @@
+2026-05-25T12:27:38.018+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge] 运行环境 shouldInit=false (无飞书特征) page=http://localhost:5174/admin/api-tokens
+2026-05-25T12:27:38.018+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge]   inIframe=false hasTt=false hasH5sdk=false uaHasLark=false
+2026-05-25T12:27:38.018+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge]   referrer=http://localhost:5174/admin/api-tokens
+2026-05-25T12:27:38.018+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge]   userAgent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36
+2026-05-25T12:27:38.018+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge] 跳过角标：当前为普通浏览器或非飞书内嵌页，不加载 H5 JSSDK。请用飞书客户端从「我的常用」打开本应用（勿用系统浏览器/新标签页）
+2026-05-25T12:38:19.935+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge] 运行环境 shouldInit=false (无飞书特征) page=http://localhost:5174/admin/api-tokens
+2026-05-25T12:38:19.935+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge]   inIframe=false hasTt=false hasH5sdk=false uaHasLark=false
+2026-05-25T12:38:19.935+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge]   referrer=http://localhost:5174/admin/api-tokens
+2026-05-25T12:38:19.935+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge]   userAgent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36
+2026-05-25T12:38:19.935+08:00 employeeId=ou_754baa28177c2666a537fb702a286192 [feishu-badge] 跳过角标：当前为普通浏览器或非飞书内嵌页，不加载 H5 JSSDK。请用飞书客户端从「我的常用」打开本应用（勿用系统浏览器/新标签页）

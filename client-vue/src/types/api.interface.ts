@@ -127,8 +127,9 @@ export interface TemplateListItem {
 export type PerformanceStatus =
   | 'template_selection'     // 待选择模板（旧状态，已弃用）
   | 'goal_setting'           // 目标设定中（员工填写目标）
-  | 'goal_pending_review'    // 待审核目标（上级/虚线上级审核）
+  | 'goal_pending_review'    // 待审核目标（仅直属上级审核）
   | 'goal_rejected'          // 目标被驳回
+  | 'plan_execution'         // 计划执行中（目标审核通过后，评分截止前）
   | 'self_review'            // 自评中
   | 'manager_review'         // 直属上级评分中（无虚线上级时仅此阶段）
   | 'dual_manager_review'    // 直属+虚线上级并行评分（均有虚线上级时，双方均提交后进入校准）
@@ -166,15 +167,13 @@ export const CULTURE_VALUE_ITEMS = [
   { name: '结果导向', maxScore: 6, description: '1. 以结果来驱动行为，对结果负责。\n2. 不找借口，突破客观条件限制，整合资源，不惜一切达成结果。\n3. 关注团队结果，团队成功才有个人价值。', criteria: '优秀(6分)，合格(3-5分)，不合格(0分)' },
 ] as const;
 
-export interface PerformanceCalibrationAssignee {
-  employeeId: string;
-  name: string;
-}
-
 export interface PerformanceRecord {
   id: string;
   employeeId: string;
   employeeName: string;
+  /** 被考核人所属飞书主体（详情） */
+  feishuSubjectCode?: string;
+  feishuSubjectName?: string;
   templateId?: string;
   templateName: string;
   /** 绩效记录选用的考核规则（详情接口返回） */
@@ -210,6 +209,17 @@ export interface PerformanceRecord {
   rejectionReason?: string;
   finalReviewerId?: string;              // 终审人ID
   finalReviewedAt?: string;              // 终审时间
+  /** 各节点截止日期（goal / plan_execution / scoring / final / confirm） */
+  nodeDeadlines?: Record<string, string>;
+  /** 创建该条绩效的管理员，默认负责校准 */
+  calibrationOwnerId?: string;
+  calibrationOwnerName?: string;
+  /** 截止自动推进前的未完成节点，校准/计划执行回退时恢复 */
+  deadlineFlowAnchor?: PerformanceStatus;
+  /** 当前用户是否可执行校准（创建人或复审管理员） */
+  canCalibrate?: boolean;
+  /** 计划执行中：当前用户是否为该条绩效创建人（可下发员工自评） */
+  canIssueSelfReview?: boolean;
   indicators?: PerformanceIndicator[];
   /** 有多级评审且当前用户可见评分数据时返回：按绩效记录上考核规则（或历史模板/系统配置回退）的角色权重 */
   reviewRoleWeights?: { managerWeight: number; dottedWeight: number };
@@ -232,8 +242,6 @@ export interface PerformanceRecord {
   learningDottedManagerReview?: ReviewItem[];
   createdAt: string;
   updatedAt: string;
-  /** 系统配置的绩效校准负责人（详情接口返回）；无配置时流程节点回退「管理员」 */
-  calibrationAssignees?: PerformanceCalibrationAssignee[];
 }
 
 /** 新建模板时默认文化维度（与内置三套一致）。 */
@@ -270,6 +278,14 @@ export interface PerformanceListItem {
   scoreGrade?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** 计划执行中且当前用户为该条创建人时可下发员工自评 */
+  canIssueSelfReview?: boolean;
+}
+
+export interface BatchIssueSelfReviewResponse {
+  success: boolean;
+  successCount: number;
+  failed: Array<{ id: string; reason: string }>;
 }
 
 export interface PerformanceFilterParams {
@@ -293,6 +309,7 @@ export interface PerformanceListResponse {
   page: number;
   pageSize: number;
   canBatchCreate?: boolean;
+  canBatchIssueSelfReview?: boolean;
   canExport?: boolean;
   canDelete?: boolean;
 }
@@ -328,11 +345,14 @@ export interface FinalReviewRequest {
   returnToStage?: PerformanceStatus; // 驳回到哪个阶段
 }
 
+export type PerformanceNodeDeadlineKey = 'goal' | 'plan_execution' | 'scoring' | 'final' | 'confirm';
+
 export interface CreatePerformanceRequest {
   employeeIds?: string[];
   employeeNames?: string[];
   period: string;
   scoringSchemeId: string;
+  nodeDeadlines?: Partial<Record<PerformanceNodeDeadlineKey, string>>;
   /** 已废弃：考核规则在员工档案中绑定；请求体可省略 */
   assessmentRuleId?: string;
   templateId?: string;
@@ -397,9 +417,16 @@ export interface CalibrationReviewRequest {
   finalScore?: number;
   rejectionReason?: string;
   returnToStage?: PerformanceStatus;
+  /** 回退时更新目标节点截止时间，yyyy-MM-dd */
+  deadline?: string;
 }
 
 export interface RejectPerformanceRequest {
+  reason: string;
+}
+
+export interface AdminRejectSelfReviewRequest {
+  recordId: string;
   reason: string;
 }
 
@@ -432,6 +459,7 @@ export type TodoType =
   | 'manager_review'
   | 'dual_manager_review'
   | 'dotted_manager_review'
+  | 'plan_execution'
   | 'final_review'
   | 'issued';
 
@@ -464,7 +492,8 @@ export type MenuPermissionKey =
   | 'admin_departments'
   | 'admin_roles'
   | 'admin_permissions'
-  | 'admin_statistics_months';
+  | 'admin_statistics_months'
+  | 'admin_api_tokens';
 
 export const MENU_PERMISSION_KEYS: MenuPermissionKey[] = [
   'todo',
@@ -484,6 +513,7 @@ export const MENU_PERMISSION_KEYS: MenuPermissionKey[] = [
   'admin_roles',
   'admin_permissions',
   'admin_statistics_months',
+  'admin_api_tokens',
 ];
 
 export interface MenuPermissionsMeResponse {
@@ -507,6 +537,28 @@ export interface RbacRoleItem {
   name: string;
   isSystem: boolean;
   sortOrder: number;
+}
+
+export interface ApiTokenItem {
+  id: number;
+  name: string;
+  createdAt?: string | null;
+  expiresAt?: string | null;
+  lastUsedAt?: string | null;
+}
+
+export interface ApiTokenListResponse {
+  items: ApiTokenItem[];
+}
+
+export interface CreateApiTokenRequest {
+  name: string;
+  expiresAt?: string | null;
+}
+
+export interface CreateApiTokenResponse {
+  success: boolean;
+  token: string;
 }
 
 export interface CreateRbacRoleRequest {
@@ -793,6 +845,17 @@ export interface CreateEmployeeRequest {
   assessmentRuleId?: string;
 }
 
+export interface BatchUpdateEmployeeAssessmentRuleRequest {
+  employeeIds: string[];
+  /** 传空字符串可清空绑定 */
+  assessmentRuleId?: string;
+}
+
+export interface BatchUpdateEmployeeAssessmentRuleResponse {
+  success: boolean;
+  updatedCount: number;
+}
+
 export interface UpdateEmployeeRequest {
   departmentId?: string;
   name?: string;
@@ -873,6 +936,36 @@ export interface SyncEmployeesResponse {
   totalCount?: number;     // 从飞书获取的总数
   validCount?: number;     // 过滤后有user_id的有效用户数
   skippedCount?: number;   // 已存在跳过的数量
+  message?: string;
+}
+
+export interface SyncFeishuSubjectResult {
+  subjectCode: string;
+  subjectName?: string;
+  success: boolean;
+  createdCount: number;
+  createdNames?: string[];
+  updatedCount: number;
+  failedCount: number;
+  /** 通讯录有但未分配飞书应用席位、未同步 */
+  skippedNoSeatCount?: number;
+  deletedCount?: number;
+  reconciledManagerCount?: number;
+  totalCount?: number;
+  message?: string;
+}
+
+export interface SyncFeishuEmployeesResponse {
+  success: boolean;
+  createdCount: number;
+  createdNames?: string[];
+  updatedCount: number;
+  failedCount: number;
+  /** 通讯录有但未分配飞书应用席位、未同步 */
+  skippedNoSeatCount?: number;
+  deletedCount?: number;
+  reconciledManagerCount?: number;
+  subjects: SyncFeishuSubjectResult[];
   message?: string;
 }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jixiao2.server.culture.CultureDimensionsSupport;
 import com.jixiao2.server.employee.EmployeeService;
+import com.jixiao2.server.feishu.FeishuBadgeSyncService;
 import com.jixiao2.server.feishu.FeishuRegistryService;
 import com.jixiao2.server.menu.MenuPermissionService;
 import com.jixiao2.server.orgdepartment.OrgDepartmentService;
@@ -38,27 +39,39 @@ public class PerformanceService {
 
   private final JdbcTemplate jdbc;
   private final MenuPermissionService menuPermissionService;
-  private final PerformanceFeishuNotifier performanceFeishuNotifier;
-  private final PerformanceFeishuTaskService performanceFeishuTaskService;
+  private final PerformanceFeishuAsyncService feishuAsync;
+  private final FeishuBadgeSyncService feishuBadgeSyncService;
   private final FeishuRegistryService feishuRegistry;
   private final EmployeeService employeeService;
   private final OrgDepartmentService orgDepartmentService;
+  private final PerformanceNodeDeadlineService nodeDeadlineService;
 
   public PerformanceService(
       JdbcTemplate jdbc,
       MenuPermissionService menuPermissionService,
-      PerformanceFeishuNotifier performanceFeishuNotifier,
-      PerformanceFeishuTaskService performanceFeishuTaskService,
+      PerformanceFeishuAsyncService feishuAsync,
+      FeishuBadgeSyncService feishuBadgeSyncService,
       FeishuRegistryService feishuRegistry,
       EmployeeService employeeService,
-      OrgDepartmentService orgDepartmentService) {
+      OrgDepartmentService orgDepartmentService,
+      PerformanceNodeDeadlineService nodeDeadlineService) {
     this.jdbc = jdbc;
     this.menuPermissionService = menuPermissionService;
-    this.performanceFeishuNotifier = performanceFeishuNotifier;
-    this.performanceFeishuTaskService = performanceFeishuTaskService;
+    this.feishuAsync = feishuAsync;
+    this.feishuBadgeSyncService = feishuBadgeSyncService;
     this.feishuRegistry = feishuRegistry;
     this.employeeService = employeeService;
     this.orgDepartmentService = orgDepartmentService;
+    this.nodeDeadlineService = nodeDeadlineService;
+  }
+
+  private void scheduleFeishuBadgeAfterChange(String recordId, String actorUserId) {
+    if (recordId != null && !recordId.trim().isEmpty()) {
+      feishuBadgeSyncService.scheduleSyncForPerformanceRecord(recordId.trim());
+    }
+    if (actorUserId != null && !actorUserId.trim().isEmpty()) {
+      feishuBadgeSyncService.scheduleSyncWithTrigger("performance_actor", actorUserId.trim());
+    }
   }
 
   private void tryLogPerformanceFlow(
@@ -147,6 +160,54 @@ public class PerformanceService {
         Boolean.TRUE.equals(menus.get("performance_batch_create")),
         Boolean.TRUE.equals(menus.get("performance_review_admin")),
         Boolean.TRUE.equals(menus.get("performance_export")));
+  }
+
+  /** 计划执行中仅创建该条绩效的用户可下发员工自评。 */
+  private boolean canIssueSelfReviewRecord(String userId, Map<String, Object> r) {
+    if (userId == null || userId.isEmpty()) {
+      return false;
+    }
+    if (!"plan_execution".equals(String.valueOf(r.get("status")))) {
+      return false;
+    }
+    String owner = r.get("calibrationOwnerId") == null ? "" : String.valueOf(r.get("calibrationOwnerId")).trim();
+    if (owner.isEmpty() && r.get("createdBy") != null) {
+      owner = String.valueOf(r.get("createdBy")).trim();
+    }
+    return !owner.isEmpty() && owner.equals(userId);
+  }
+
+  private void transitionPlanExecutionToSelfReview(String id, String userId, String action) {
+    Map<String, Object> r = loadRecord(id);
+    if (!"plan_execution".equals(String.valueOf(r.get("status")))) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许下发员工自评");
+    }
+    String oldStatus = String.valueOf(r.get("status"));
+    jdbc.update("UPDATE performance_record SET status=? WHERE id=?", "self_review", id);
+    tryLogPerformanceFlow(id, oldStatus, "self_review", action, userId, null);
+    scheduleFeishuBadgeAfterChange(id, userId);
+  }
+
+  /** 本条绩效的校准负责人：创建人（calibration_owner_id / _created_by）或具备复审权限的管理员。 */
+  private boolean canCalibrateRecord(String userId, Map<String, Object> r) {
+    if (userId == null || userId.isEmpty()) {
+      return false;
+    }
+    String owner = r.get("calibrationOwnerId") == null ? "" : String.valueOf(r.get("calibrationOwnerId")).trim();
+    if (owner.isEmpty() && r.get("createdBy") != null) {
+      owner = String.valueOf(r.get("createdBy")).trim();
+    }
+    return !owner.isEmpty() && owner.equals(userId);
+  }
+
+  /** 待校准环节仅绩效创建人/校准负责人可改分（允许兼任直属或虚线上级）。 */
+  private void assertFinalReviewScoreEditAllowed(String userId, Map<String, Object> r) {
+    if (!"final_review".equals(String.valueOf(r.get("status")))) {
+      return;
+    }
+    if (!canCalibrateRecord(userId, r)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "校准环节仅校准负责人可修改评分");
+    }
   }
 
   /** 优先绩效记录上的考核规则；否则回退模板绑定（旧数据）；再回退 system_config。 */
@@ -665,6 +726,61 @@ public class PerformanceService {
     return true;
   }
 
+  /** 学习与成长评分是否已填齐（兼容 JSON 中 name / indicatorName 字段）。 */
+  private boolean isLearningReviewComplete(
+      List<Map<String, Object>> review, List<Map<String, Object>> learningIndicators) {
+    if (learningIndicators == null || learningIndicators.isEmpty()) {
+      return true;
+    }
+    if (review == null || review.isEmpty()) {
+      return false;
+    }
+    Map<String, Map<String, Object>> byName = new HashMap<String, Map<String, Object>>();
+    for (Map<String, Object> i : review) {
+      Object key = i.get("indicatorName");
+      if (key == null || String.valueOf(key).trim().isEmpty()) {
+        key = i.get("name");
+      }
+      if (key != null && !String.valueOf(key).trim().isEmpty()) {
+        byName.put(String.valueOf(key).trim(), i);
+      }
+    }
+    for (Map<String, Object> ind : learningIndicators) {
+      Object n = ind.get("name");
+      if (n == null || String.valueOf(n).trim().isEmpty()) {
+        n = ind.get("indicatorName");
+      }
+      if (n == null || String.valueOf(n).trim().isEmpty()) {
+        continue;
+      }
+      Map<String, Object> item = byName.get(String.valueOf(n).trim());
+      if (item == null) {
+        return false;
+      }
+      Object s = item.get("score");
+      if (!(s instanceof Number) || Double.isNaN(((Number) s).doubleValue())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 校准回退时清理下游评分，避免虚线侧旧分仍视为已完成而直接进入校准。 */
+  private void appendCalibrateRollbackReviewReset(
+      List<String> setParts, String target, String oldStatus, Map<String, Object> r) {
+    if ("final_review".equals(oldStatus) || "issued".equals(oldStatus)) {
+      setParts.add("total_score=NULL");
+      setParts.add("score_grade=NULL");
+      setParts.add("final_reviewer_id=NULL");
+      setParts.add("final_reviewed_at=NULL");
+    }
+    if ("dual_manager_review".equals(target) && r.get("dottedManagerId") != null) {
+      setParts.add("dotted_manager_review=NULL");
+      setParts.add("culture_dotted_manager_review=NULL");
+      setParts.add("learning_dotted_manager_review=NULL");
+    }
+  }
+
   private static double[] normalizeRoleWeights(Double managerWeight, Double dottedWeight) {
     if (managerWeight != null && dottedWeight != null) {
       return new double[] {managerWeight, dottedWeight};
@@ -796,9 +912,8 @@ public class PerformanceService {
       args.add("dotted_manager_review");
       args.add(userId);
     } else if ("need_approve_goal".equals(focus)) {
-      parts.add("(pr.status=? AND (pr.manager_id=? OR pr.dotted_manager_id=?))");
+      parts.add("(pr.status=? AND pr.manager_id=?)");
       args.add("goal_pending_review");
-      args.add(userId);
       args.add(userId);
     } else {
       List<String> statusList = parseStatusFilter(status);
@@ -876,6 +991,7 @@ public class PerformanceService {
     empty.put("page", page);
     empty.put("pageSize", pageSize);
     empty.put("canBatchCreate", false);
+    empty.put("canBatchIssueSelfReview", false);
     empty.put("canExport", false);
     if (userId == null || userId.isEmpty()) {
       return empty;
@@ -900,12 +1016,22 @@ public class PerformanceService {
 
     List<Map<String, Object>> items =
         jdbc.query(
-            "SELECT pr.id, pr.employee_id, pr.period, pr.status, pr.manager_id, pr.total_score, pr.score_grade,"
+            "SELECT pr.id, pr.employee_id, pr.period, pr.status, pr.manager_id, pr.dotted_manager_id,"
+                + " pr.calibration_owner_id, pr._created_by, pr.total_score, pr.score_grade,"
                 + " pr._created_at, pr._updated_at, emp.name AS employee_name, mgr.name AS manager_name"
                 + from
                 + " ORDER BY pr._created_at DESC LIMIT ? OFFSET ?",
             (rs, rn) -> mapListItem(rs),
             listArgs.toArray());
+
+    boolean anyCanIssue = false;
+    for (Map<String, Object> item : items) {
+      boolean canIssue = canIssueSelfReviewRecord(userId, item);
+      item.put("canIssueSelfReview", canIssue);
+      if (canIssue) {
+        anyCanIssue = true;
+      }
+    }
 
     Integer total =
         jdbc.queryForObject(
@@ -920,6 +1046,7 @@ public class PerformanceService {
     out.put("page", page);
     out.put("pageSize", pageSize);
     out.put("canBatchCreate", flags.batchCreate);
+    out.put("canBatchIssueSelfReview", anyCanIssue);
     out.put("canExport", flags.exportData);
     out.put("canDelete", flags.batchCreate);
     return out;
@@ -934,6 +1061,18 @@ public class PerformanceService {
     item.put("status", rs.getString("status"));
     item.put("managerId", rs.getString("manager_id"));
     item.put("managerName", trimOrEmpty(rs.getString("manager_name")));
+    String dottedManagerId = rs.getString("dotted_manager_id");
+    if (dottedManagerId != null && !dottedManagerId.trim().isEmpty()) {
+      item.put("dottedManagerId", dottedManagerId.trim());
+    }
+    String calibrationOwnerId = rs.getString("calibration_owner_id");
+    if (calibrationOwnerId != null && !calibrationOwnerId.trim().isEmpty()) {
+      item.put("calibrationOwnerId", calibrationOwnerId.trim());
+    }
+    String createdBy = rs.getString("_created_by");
+    if (createdBy != null && !createdBy.trim().isEmpty()) {
+      item.put("createdBy", createdBy.trim());
+    }
     item.put("totalScore", toDouble(rs.getBigDecimal("total_score")));
     item.put("scoreGrade", rs.getString("score_grade"));
     item.put("createdAt", iso(rs.getTimestamp("_created_at")));
@@ -957,14 +1096,19 @@ public class PerformanceService {
     if (userId == null || userId.isEmpty()) {
       return empty;
     }
-    menuPermissionService.assertSuperAdmin(
-        menuPermissionService.getUserRole(userId), "仅超级管理员可查看绩效校准队列");
+    MenuFlags flags = performanceMenuFlags(userId);
+    if (!flags.reviewAdmin && !flags.batchCreate) {
+      return empty;
+    }
 
     List<String> parts = new ArrayList<String>();
     List<Object> args = new ArrayList<Object>();
     parts.add("pr.deleted_at IS NULL");
     parts.add("pr.status=?");
     args.add("final_review");
+    parts.add("(pr.calibration_owner_id=? OR pr._created_by=?)");
+    args.add(userId);
+    args.add(userId);
     if (period != null && !period.trim().isEmpty()) {
       parts.add("pr.period=?");
       args.add(period.trim());
@@ -1011,7 +1155,8 @@ public class PerformanceService {
     List<Map<String, Object>> items =
         jdbc.query(
             "SELECT pr.id, pr.employee_id, pr.period, pr.status, pr.manager_id, pr.dotted_manager_id,"
-                + " pr.total_score, pr.score_grade, pr._created_at, pr._updated_at, emp.name AS employee_name,"
+                + " pr.calibration_owner_id, pr._created_by, pr.total_score, pr.score_grade,"
+                + " pr._created_at, pr._updated_at, emp.name AS employee_name,"
                 + " mgr.name AS manager_name, dot.name AS dotted_manager_name,"
                 + " COUNT(*) OVER() AS _list_total"
                 + from
@@ -1149,6 +1294,10 @@ public class PerformanceService {
               m.put("rejectionReason", rs.getString("rejection_reason"));
               m.put("finalReviewerId", rs.getString("final_reviewer_id"));
               m.put("finalReviewedAt", rs.getTimestamp("final_reviewed_at"));
+              m.put("nodeDeadlines", rs.getString("node_deadlines"));
+              m.put("deadlineFlowAnchor", rs.getString("deadline_flow_anchor"));
+              m.put("calibrationOwnerId", rs.getString("calibration_owner_id"));
+              m.put("createdBy", rs.getString("_created_by"));
               m.put("createdAt", rs.getTimestamp("_created_at"));
               m.put("updatedAt", rs.getTimestamp("_updated_at"));
               return m;
@@ -1158,6 +1307,67 @@ public class PerformanceService {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "绩效记录不存在");
     }
     return rows.get(0);
+  }
+
+  /** 截止自动推进进入校准时，若直属/虚线上级绩效评分已齐则刷新 total_score（含权重合成）。 */
+  public void refreshTotalScoreIfManagersReady(String recordId) {
+    try {
+      Map<String, Object> r = loadRecord(recordId);
+      List<Map<String, Object>> indicators = resolvePerformanceIndicators(r);
+      List<String> indicatorNames = new ArrayList<String>();
+      for (Map<String, Object> ind : indicators) {
+        indicatorNames.add(String.valueOf(ind.get("name")));
+      }
+      if (indicatorNames.isEmpty()) {
+        return;
+      }
+      List<Map<String, Object>> mgrRev = parseReviewJson((String) r.get("managerReview"));
+      List<Map<String, Object>> dotRev = parseReviewJson((String) r.get("dottedManagerReview"));
+      String dottedManagerId =
+          r.get("dottedManagerId") == null ? "" : String.valueOf(r.get("dottedManagerId")).trim();
+      boolean hasDotted = !dottedManagerId.isEmpty();
+      boolean mgrDone = isReviewComplete(mgrRev, indicatorNames);
+      boolean dotDone = !hasDotted || isReviewComplete(dotRev, indicatorNames);
+      if (!mgrDone || !dotDone) {
+        return;
+      }
+      String templateId = r.get("templateId") == null ? null : String.valueOf(r.get("templateId"));
+      String assessmentRuleId =
+          r.get("assessmentRuleId") == null ? null : String.valueOf(r.get("assessmentRuleId")).trim();
+      if (assessmentRuleId != null && assessmentRuleId.isEmpty()) {
+        assessmentRuleId = null;
+      }
+      List<Map<String, Object>> cultureMgr = parseReviewJson((String) r.get("cultureManagerReview"));
+      List<Map<String, Object>> cultureDot = parseReviewJson((String) r.get("cultureDottedManagerReview"));
+      Map<String, Object> swMap = parseScoringWeightsMap(r);
+      List<Map<String, Object>> cultureDims =
+          CultureDimensionsSupport.parseListOrDefault((String) r.get("recordCultureDimensions"));
+      List<Map<String, Object>> learningInds = parseLearningIndicators(r);
+      List<Map<String, Object>> learningMgr = parseReviewJson((String) r.get("learningManagerReview"));
+      List<Map<String, Object>> learningDot = parseReviewJson((String) r.get("learningDottedManagerReview"));
+      double total =
+          computeTotalScore(
+              assessmentRuleId,
+              templateId,
+              indicators,
+              mgrRev,
+              dotRev,
+              hasDotted,
+              cultureMgr,
+              cultureDot,
+              swMap,
+              cultureDims,
+              learningMgr,
+              learningDot,
+              learningInds);
+      jdbc.update(
+          "UPDATE performance_record SET total_score=?, score_grade=? WHERE id=?",
+          total,
+          scoreGradeFromTotal(total),
+          recordId);
+    } catch (Exception e) {
+      log.warn("refreshTotalScoreIfManagersReady failed recordId={}", recordId, e);
+    }
   }
 
   public Map<String, Object> getDetail(String userId, String id) {
@@ -1225,6 +1435,14 @@ public class PerformanceService {
     if (dottedManagerId != null) {
       nameIds.add(dottedManagerId);
     }
+    String calibrationOwnerIdForNames =
+        r.get("calibrationOwnerId") == null ? "" : String.valueOf(r.get("calibrationOwnerId")).trim();
+    if (calibrationOwnerIdForNames.isEmpty() && r.get("createdBy") != null) {
+      calibrationOwnerIdForNames = String.valueOf(r.get("createdBy")).trim();
+    }
+    if (!calibrationOwnerIdForNames.isEmpty()) {
+      nameIds.add(calibrationOwnerIdForNames);
+    }
     Map<String, String> nameById = loadEmployeeNames(nameIds);
 
     List<String> indicatorNames = new ArrayList<String>();
@@ -1234,11 +1452,17 @@ public class PerformanceService {
 
     String detailViewerRole = menuPermissionService.getUserRole(userId);
     boolean isSuperAdminViewer = "super_admin".equals(detailViewerRole);
+    boolean canCalibrateViewer = canCalibrateRecord(userId, r);
     boolean showReviewSynthesis =
         !hideReviewData
             && !indicatorNames.isEmpty()
-            && (isManager || isDottedManager || flags.listAll || isSuperAdminViewer)
-            && (dottedManagerId != null || isSuperAdminViewer);
+            && (isManager
+                || isDottedManager
+                || flags.listAll
+                || canCalibrateViewer)
+            && (dottedManagerId != null
+                || canCalibrateViewer
+                || flags.listAll);
 
     List<Map<String, Object>> mgrRevForTotals = parseReviewJson((String) r.get("managerReview"));
     List<Map<String, Object>> dotRevForTotals = parseReviewJson((String) r.get("dottedManagerReview"));
@@ -1345,6 +1569,7 @@ public class PerformanceService {
     out.put("id", r.get("id"));
     out.put("employeeId", employeeId);
     out.put("employeeName", nameById.get(employeeId));
+    appendEmployeeFeishuSubject(out, employeeId);
     if (templateId != null) {
       out.put("templateId", templateId);
     }
@@ -1356,6 +1581,30 @@ public class PerformanceService {
     }
     out.put("templateName", templateName);
     out.put("period", r.get("period"));
+    Map<String, String> nodeDeadlines =
+        nodeDeadlineService.parseJson((String) r.get("nodeDeadlines"));
+    if (nodeDeadlines.isEmpty()) {
+      nodeDeadlines = nodeDeadlineService.defaultDeadlinesForPeriod(String.valueOf(r.get("period")));
+    }
+    out.put("nodeDeadlines", nodeDeadlines);
+    String calibrationOwnerId =
+        r.get("calibrationOwnerId") == null ? "" : String.valueOf(r.get("calibrationOwnerId")).trim();
+    if (calibrationOwnerId.isEmpty() && r.get("createdBy") != null) {
+      calibrationOwnerId = String.valueOf(r.get("createdBy")).trim();
+    }
+    if (!calibrationOwnerId.isEmpty()) {
+      out.put("calibrationOwnerId", calibrationOwnerId);
+      String calibrationOwnerName = trimOrEmpty(nameById.get(calibrationOwnerId));
+      if (!calibrationOwnerName.isEmpty()) {
+        out.put("calibrationOwnerName", calibrationOwnerName);
+      }
+    }
+    out.put("canCalibrate", canCalibrateRecord(userId, r));
+    out.put("canIssueSelfReview", canIssueSelfReviewRecord(userId, r));
+    Object deadlineFlowAnchor = r.get("deadlineFlowAnchor");
+    if (deadlineFlowAnchor != null && !String.valueOf(deadlineFlowAnchor).trim().isEmpty()) {
+      out.put("deadlineFlowAnchor", String.valueOf(deadlineFlowAnchor).trim());
+    }
     out.put("status", r.get("status"));
     out.put("managerId", managerId);
     out.put("managerName", nameById.get(managerId));
@@ -1452,8 +1701,36 @@ public class PerformanceService {
     }
     out.put("createdAt", iso((Timestamp) r.get("createdAt")));
     out.put("updatedAt", iso((Timestamp) r.get("updatedAt")));
-    out.put("calibrationAssignees", employeeService.listCalibrationAssigneesWithNames());
     return out;
+  }
+
+  private void appendEmployeeFeishuSubject(Map<String, Object> out, String employeeId) {
+    if (employeeId == null || employeeId.trim().isEmpty()) {
+      return;
+    }
+    List<Map<String, Object>> rows =
+        jdbc.query(
+            "SELECT fs.code AS subject_code, fs.name AS subject_name FROM employee_hierarchy eh "
+                + "LEFT JOIN feishu_subject fs ON fs.id = eh.feishu_subject_id "
+                + "WHERE eh.employee_id = ? LIMIT 1",
+            (rs, rn) -> {
+              Map<String, Object> m = new LinkedHashMap<String, Object>();
+              m.put("code", rs.getString("subject_code"));
+              m.put("name", rs.getString("subject_name"));
+              return m;
+            },
+            employeeId.trim());
+    if (rows.isEmpty()) {
+      return;
+    }
+    String code = trimOrEmpty((String) rows.get(0).get("code"));
+    String name = trimOrEmpty((String) rows.get(0).get("name"));
+    if (!code.isEmpty()) {
+      out.put("feishuSubjectCode", code);
+    }
+    if (!name.isEmpty()) {
+      out.put("feishuSubjectName", name);
+    }
   }
 
   private Map<String, String> loadEmployeeNames(Set<String> ids) {
@@ -1533,11 +1810,19 @@ public class PerformanceService {
       }
     } else if ("manager".equals(reviewType)) {
       if (!String.valueOf(r.get("managerId")).equals(userId)) {
-        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权保存该草稿");
+        if (!"final_review".equals(String.valueOf(r.get("status")))
+            || !canCalibrateRecord(userId, r)) {
+          throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权保存该草稿");
+        }
+      } else {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       String st = String.valueOf(r.get("status"));
       if (!"manager_review".equals(st) && !"dual_manager_review".equals(st) && !"final_review".equals(st)) {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许保存上级评分草稿");
+      }
+      if ("final_review".equals(st)) {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       sets.add("manager_review=?");
       args.add(writeJson(content));
@@ -1562,12 +1847,23 @@ public class PerformanceService {
         args.add(writeJson(body.get("learningContent")));
       }
     } else if ("dotted_manager".equals(reviewType)) {
-      if (r.get("dottedManagerId") == null || !String.valueOf(r.get("dottedManagerId")).equals(userId)) {
+      if (r.get("dottedManagerId") == null) {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权保存该草稿");
+      }
+      if (!String.valueOf(r.get("dottedManagerId")).equals(userId)) {
+        if (!"final_review".equals(String.valueOf(r.get("status")))
+            || !canCalibrateRecord(userId, r)) {
+          throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权保存该草稿");
+        }
+      } else {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       String st = String.valueOf(r.get("status"));
       if (!"dotted_manager_review".equals(st) && !"dual_manager_review".equals(st) && !"final_review".equals(st)) {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许保存虚线上级评分草稿");
+      }
+      if ("final_review".equals(st)) {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       sets.add("dotted_manager_review=?");
       args.add(writeJson(content));
@@ -1719,11 +2015,19 @@ public class PerformanceService {
       newStatus = r.get("dottedManagerId") != null ? "dual_manager_review" : "manager_review";
     } else if ("manager".equals(reviewType)) {
       if (!String.valueOf(r.get("managerId")).equals(userId)) {
-        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权提交上级评分");
+        if (!"final_review".equals(String.valueOf(r.get("status")))
+            || !canCalibrateRecord(userId, r)) {
+          throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权提交上级评分");
+        }
+      } else {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       String st = String.valueOf(r.get("status"));
       if (!"manager_review".equals(st) && !"dual_manager_review".equals(st) && !"final_review".equals(st)) {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许提交上级评分");
+      }
+      if ("final_review".equals(st)) {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       sets.add("manager_review=?");
       args.add(writeJson(content));
@@ -1823,7 +2127,9 @@ public class PerformanceService {
       } else if ("dual_manager_review".equals(st)) {
         boolean mgrComplete = isReviewComplete(content, indicatorNames);
         boolean dotComplete = isReviewComplete(existingDot, indicatorNames);
-        if (mgrComplete && dotComplete && hasDotted) {
+        boolean mgrLearningDone = isLearningReviewComplete(effectiveLearningMgr, learningIndsMgr);
+        boolean dotLearningDone = isLearningReviewComplete(existingLearningDot, learningIndsMgr);
+        if (mgrComplete && dotComplete && mgrLearningDone && dotLearningDone && hasDotted) {
           appendTotalScoreAndGrade(
               sets,
               args,
@@ -1884,12 +2190,23 @@ public class PerformanceService {
         }
       }
     } else if ("dotted_manager".equals(reviewType)) {
-      if (r.get("dottedManagerId") == null || !String.valueOf(r.get("dottedManagerId")).equals(userId)) {
+      if (r.get("dottedManagerId") == null) {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权提交虚线上级评分");
+      }
+      if (!String.valueOf(r.get("dottedManagerId")).equals(userId)) {
+        if (!"final_review".equals(String.valueOf(r.get("status")))
+            || !canCalibrateRecord(userId, r)) {
+          throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权提交虚线上级评分");
+        }
+      } else {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       String st = String.valueOf(r.get("status"));
       if (!"dotted_manager_review".equals(st) && !"dual_manager_review".equals(st) && !"final_review".equals(st)) {
         throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许提交虚线上级评分");
+      }
+      if ("final_review".equals(st)) {
+        assertFinalReviewScoreEditAllowed(userId, r);
       }
       sets.add("dotted_manager_review=?");
       args.add(writeJson(content));
@@ -1968,7 +2285,9 @@ public class PerformanceService {
       } else if ("dual_manager_review".equals(st)) {
         boolean dotComplete = isReviewComplete(content, indicatorNames);
         boolean mgrComplete = isReviewComplete(existingMgr, indicatorNames);
-        if (mgrComplete && dotComplete) {
+        boolean mgrLearningDone = isLearningReviewComplete(existingLearningMgrForDot, learningIndsDot);
+        boolean dotLearningDone = isLearningReviewComplete(effectiveLearningDot, learningIndsDot);
+        if (mgrComplete && dotComplete && mgrLearningDone && dotLearningDone) {
           appendTotalScoreAndGrade(
               sets,
               args,
@@ -2038,24 +2357,34 @@ public class PerformanceService {
       tryLogPerformanceFlow(id, oldStatus, newStatus, "submit", userId, reviewType);
     }
     log.info("绩效 {} 已提交，新状态: {}", id, newStatus);
-    try {
-      performanceFeishuTaskService.completeAfterSubmit(userId, id, oldStatus, reviewType);
-    } catch (Exception ex) {
-      log.warn("绩效飞书待办完成异常 record={}", id, ex);
-    }
-    try {
-      if ("goal".equals(reviewType)) {
-        performanceFeishuNotifier.notifyGoalPendingReview(r, id);
-      } else if ("self".equals(reviewType)) {
-        performanceFeishuNotifier.notifySelfSubmitted(r, id, newStatus);
-      } else if ("manager".equals(reviewType)) {
-        performanceFeishuNotifier.notifyAfterManagerSubmit(userId, r, id, oldStatus, newStatus);
-      } else if ("dotted_manager".equals(reviewType)) {
-        performanceFeishuNotifier.notifyAfterDottedSubmit(userId, r, id, oldStatus, newStatus);
-      }
-    } catch (Exception ex) {
-      log.warn("绩效飞书通知派发异常 record={}", id, ex);
-    }
+    final String recId = id;
+    final String actor = userId;
+    final String stOld = oldStatus;
+    final String stNew = newStatus;
+    final String rvType = reviewType;
+    final Map<String, Object> recSnap = r;
+    feishuAsync.dispatch(
+        () -> {
+          try {
+            feishuAsync.taskService().completeAfterSubmit(actor, recId, stOld, rvType);
+          } catch (Exception ex) {
+            log.warn("绩效飞书待办完成异常 record={}", recId, ex);
+          }
+          try {
+            if ("goal".equals(rvType)) {
+              feishuAsync.notifier().notifyGoalPendingReview(recSnap, recId);
+            } else if ("self".equals(rvType)) {
+              feishuAsync.notifier().notifySelfSubmitted(recSnap, recId, stNew);
+            } else if ("manager".equals(rvType)) {
+              feishuAsync.notifier().notifyAfterManagerSubmit(actor, recSnap, recId, stOld, stNew);
+            } else if ("dotted_manager".equals(rvType)) {
+              feishuAsync.notifier().notifyAfterDottedSubmit(actor, recSnap, recId, stOld, stNew);
+            }
+          } catch (Exception ex) {
+            log.warn("绩效飞书通知派发异常 record={}", recId, ex);
+          }
+        });
+    scheduleFeishuBadgeAfterChange(id, userId);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("success", true);
     out.put("newStatus", newStatus);
@@ -2077,25 +2406,60 @@ public class PerformanceService {
     if (isDottedManager && !"dotted_manager_review".equals(st) && !"dual_manager_review".equals(st)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许驳回");
     }
+    return executeRejectSelfReview(r, id, userId, reason, st, "reject_subordinate");
+  }
+
+  /** 超管驳回员工自评（自评总结不合格），供 Agent / 运维使用。 */
+  public Map<String, Object> rejectSelfReviewBySuperAdmin(String userId, String id, String reason) {
+    menuPermissionService.assertSuperAdmin(
+        menuPermissionService.getUserRole(userId), "仅超级管理员可驳回员工自评");
+    String trimmedReason = reason == null ? "" : reason.trim();
+    if (trimmedReason.isEmpty()) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "驳回原因不能为空");
+    }
+    Map<String, Object> r = loadRecord(id);
+    String st = String.valueOf(r.get("status"));
+    if (!isRejectableSelfReviewStatus(st)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许驳回自评");
+    }
+    return executeRejectSelfReview(r, id, userId, trimmedReason, st, "admin_reject_self_review");
+  }
+
+  private static boolean isRejectableSelfReviewStatus(String status) {
+    return "manager_review".equals(status)
+        || "dual_manager_review".equals(status)
+        || "dotted_manager_review".equals(status);
+  }
+
+  private Map<String, Object> executeRejectSelfReview(
+      Map<String, Object> r, String id, String userId, String reason, String fromStatus, String flowAction) {
     jdbc.update(
         "UPDATE performance_record SET status=?, rejection_reason=? WHERE id=?",
         "self_review",
         reason,
         id);
-    tryLogPerformanceFlow(id, st, "self_review", "reject_subordinate", userId, reason);
-    log.info("绩效 {} 已驳回自评并退回员工，原因: {}", id, reason);
-    try {
-      performanceFeishuTaskService.completePending(id, "manager", null);
-    } catch (Exception ex) {
-      log.warn("绩效飞书待办完成异常 record={}", id, ex);
-    }
-    try {
-      performanceFeishuNotifier.notifyRejectToEmployee(r, id, reason);
-    } catch (Exception ex) {
-      log.warn("绩效飞书通知派发异常 record={}", id, ex);
-    }
+    tryLogPerformanceFlow(id, fromStatus, "self_review", flowAction, userId, reason);
+    log.info("绩效 {} 已驳回自评并退回员工 action={} 原因: {}", id, flowAction, reason);
+    final String recId = id;
+    final String rejectReason = reason;
+    final Map<String, Object> recSnap = r;
+    feishuAsync.dispatch(
+        () -> {
+          try {
+            feishuAsync.taskService().completePending(recId, "manager", null);
+          } catch (Exception ex) {
+            log.warn("绩效飞书待办完成异常 record={}", recId, ex);
+          }
+          try {
+            feishuAsync.notifier().notifyRejectToEmployee(recSnap, recId, rejectReason);
+          } catch (Exception ex) {
+            log.warn("绩效飞书通知派发异常 record={}", recId, ex);
+          }
+        });
+    scheduleFeishuBadgeAfterChange(id, userId);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("success", true);
+    out.put("newStatus", "self_review");
     return out;
   }
 
@@ -2362,6 +2726,8 @@ public class PerformanceService {
     if (templateId != null && templateId.isEmpty()) templateId = null;
 
     List<Map<String, Object>> results = new ArrayList<Map<String, Object>>(precResults);
+    List<PerformanceFeishuAsyncService.RecordCreatedItem> pendingFeishuCreates =
+        new ArrayList<PerformanceFeishuAsyncService.RecordCreatedItem>();
 
     for (String employeeIdValue : uniqueEmployeeIds) {
       try {
@@ -2437,11 +2803,19 @@ public class PerformanceService {
           continue;
         }
         String newId = UUID.randomUUID().toString();
+        Map<String, Object> deadlineOverrides =
+            body.get("nodeDeadlines") instanceof Map
+                ? (Map<String, Object>) body.get("nodeDeadlines")
+                : null;
+        String nodeDeadlinesJson =
+            nodeDeadlineService.writeJson(
+                nodeDeadlineService.mergeDeadlines(period, deadlineOverrides));
         jdbc.update(
-            "INSERT INTO performance_record (id, employee_id, period, status, manager_id, dotted_manager_id, template_id, culture_dimensions, learning_dimensions, scoring_scheme_id, scoring_weights, culture_template_id, learning_template_id, assessment_rule_id) VALUES (?,?,?,?,?,?,?,CAST(? AS JSON),CAST(? AS JSON),?,CAST(? AS JSON),?,?,?)",
+            "INSERT INTO performance_record (id, employee_id, period, node_deadlines, status, manager_id, dotted_manager_id, template_id, culture_dimensions, learning_dimensions, scoring_scheme_id, scoring_weights, culture_template_id, learning_template_id, assessment_rule_id, calibration_owner_id, _created_by) VALUES (?,?,?,CAST(? AS JSON),?,?,?,?,CAST(? AS JSON),CAST(? AS JSON),?,CAST(? AS JSON),?,?,?,?,?)",
             newId,
             employeeIdValue,
             period,
+            nodeDeadlinesJson,
             "goal_setting",
             managerId,
             dottedManagerId,
@@ -2452,7 +2826,9 @@ public class PerformanceService {
             scoringWeightsJson,
             cultureTemplateId,
             learningTemplateId,
-            assessmentRuleId);
+            assessmentRuleId,
+            userId,
+            userId);
         results.add(resultRow(employeeIdValue, (String) emp.get("name"), true, newId, null));
         log.info(
             "[createPerformanceRecord] inserted recordId={} employeeId={} assessmentRuleId={} culture_template_id={} cultureSnapLen={} learningSnapLen={}",
@@ -2463,16 +2839,10 @@ public class PerformanceService {
             cultureSnapJson == null ? 0 : cultureSnapJson.length(),
             learningDimsJson == null ? 0 : learningDimsJson.length());
         log.info("创建绩效记录: employeeId={}, period={}, id={}", employeeIdValue, period, newId);
-        try {
-          log.info(
-              "绩效批量创建后触发飞书通知调用 employeeId={} recordId={} period={}",
-              employeeIdValue,
-              newId,
-              period);
-          performanceFeishuNotifier.notifyRecordCreated(employeeIdValue, newId, period);
-        } catch (Exception ex) {
-          log.warn("绩效飞书通知派发异常 record={}", newId, ex);
-        }
+        pendingFeishuCreates.add(
+            new PerformanceFeishuAsyncService.RecordCreatedItem(
+                employeeIdValue, newId, period, nodeDeadlinesJson));
+        scheduleFeishuBadgeAfterChange(newId, null);
       } catch (Exception e) {
         results.add(
             resultRow(
@@ -2489,6 +2859,10 @@ public class PerformanceService {
       if (Boolean.TRUE.equals(r.get("success"))) {
         successCount++;
       }
+    }
+    if (!pendingFeishuCreates.isEmpty()) {
+      log.info("绩效批量创建完成，异步派发飞书通知 count={}", pendingFeishuCreates.size());
+      feishuAsync.dispatchRecordCreatedBatch(pendingFeishuCreates);
     }
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("results", results);
@@ -2517,10 +2891,7 @@ public class PerformanceService {
 
   public Map<String, Object> approveGoal(String userId, String id, Map<String, Object> body) {
     Map<String, Object> r = loadRecord(id);
-    boolean isManager = String.valueOf(r.get("managerId")).equals(userId);
-    boolean isDottedManager =
-        r.get("dottedManagerId") != null && String.valueOf(r.get("dottedManagerId")).equals(userId);
-    if (!isManager && !isDottedManager) {
+    if (!String.valueOf(r.get("managerId")).equals(userId)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权审核目标设定");
     }
     if (!"goal_pending_review".equals(String.valueOf(r.get("status")))) {
@@ -2528,7 +2899,7 @@ public class PerformanceService {
     }
     String oldStatus = String.valueOf(r.get("status"));
     boolean approved = Boolean.TRUE.equals(body.get("approved"));
-    String newStatus = approved ? "self_review" : "goal_rejected";
+    String newStatus = approved ? "plan_execution" : "goal_rejected";
     if (approved) {
       jdbc.update(
           "UPDATE performance_record SET status=?, goal_approved_by=?, rejection_reason=NULL WHERE id=?",
@@ -2553,22 +2924,27 @@ public class PerformanceService {
         userId,
         approved ? null : String.valueOf(body.get("rejectionReason")));
     log.info("绩效 {} 目标审核完成，新状态: {}", id, newStatus);
-    try {
-      performanceFeishuTaskService.completeAllGoalReview(id);
-    } catch (Exception ex) {
-      log.warn("绩效飞书待办完成异常 record={}", id, ex);
-    }
-    try {
-      if (approved) {
-        performanceFeishuNotifier.notifyApproveGoal(r, id, true, null);
-      } else {
-        String rr =
-            body.get("rejectionReason") == null ? "目标设定未通过审核" : String.valueOf(body.get("rejectionReason"));
-        performanceFeishuNotifier.notifyApproveGoal(r, id, false, rr);
-      }
-    } catch (Exception ex) {
-      log.warn("绩效飞书通知派发异常 record={}", id, ex);
-    }
+    final String recId = id;
+    final boolean goalApproved = approved;
+    final Map<String, Object> recSnap = r;
+    final String rejectReason =
+        body.get("rejectionReason") == null ? "目标设定未通过审核" : String.valueOf(body.get("rejectionReason"));
+    feishuAsync.dispatch(
+        () -> {
+          try {
+            feishuAsync.taskService().completeAllGoalReview(recId);
+          } catch (Exception ex) {
+            log.warn("绩效飞书待办完成异常 record={}", recId, ex);
+          }
+          try {
+            if (!goalApproved) {
+              feishuAsync.notifier().notifyApproveGoal(recSnap, recId, false, rejectReason);
+            }
+          } catch (Exception ex) {
+            log.warn("绩效飞书通知派发异常 record={}", recId, ex);
+          }
+        });
+    scheduleFeishuBadgeAfterChange(id, userId);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("success", true);
     out.put("newStatus", newStatus);
@@ -2614,20 +2990,30 @@ public class PerformanceService {
         userId,
         approved ? null : String.valueOf(body.get("rejectionReason")));
     log.info("绩效 {} 终审完成，新状态: {}", id, newStatus);
-    try {
-      performanceFeishuTaskService.completeAllFinal(id);
-    } catch (Exception ex) {
-      log.warn("绩效飞书待办完成异常 record={}", id, ex);
-    }
-    try {
-      String rejectionReason =
-          approved
-              ? null
-              : (body.get("rejectionReason") == null ? "终审未通过" : String.valueOf(body.get("rejectionReason")));
-      performanceFeishuNotifier.notifyFinalReviewToEmployee(r, id, approved, newStatus, rejectionReason);
-    } catch (Exception ex) {
-      log.warn("绩效飞书通知派发异常 record={}", id, ex);
-    }
+    final String recId = id;
+    final boolean finalApproved = approved;
+    final String finalNewStatus = newStatus;
+    final Map<String, Object> recSnap = r;
+    final String rejectionReason =
+        approved
+            ? null
+            : (body.get("rejectionReason") == null ? "终审未通过" : String.valueOf(body.get("rejectionReason")));
+    feishuAsync.dispatch(
+        () -> {
+          try {
+            feishuAsync.taskService().completeAllFinal(recId);
+          } catch (Exception ex) {
+            log.warn("绩效飞书待办完成异常 record={}", recId, ex);
+          }
+          try {
+            feishuAsync
+                .notifier()
+                .notifyFinalReviewToEmployee(recSnap, recId, finalApproved, finalNewStatus, rejectionReason);
+          } catch (Exception ex) {
+            log.warn("绩效飞书通知派发异常 record={}", recId, ex);
+          }
+        });
+    scheduleFeishuBadgeAfterChange(id, userId);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("success", true);
     out.put("newStatus", newStatus);
@@ -2762,69 +3148,53 @@ public class PerformanceService {
     if (userId == null || userId.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "请先登录");
     }
-    MenuFlags flags = performanceMenuFlags(userId);
-    if (!flags.reviewAdmin) {
+    Map<String, Object> r = loadRecord(id);
+    if (!canCalibrateRecord(userId, r)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权执行绩效校准");
     }
-    Map<String, Object> r = loadRecord(id);
     if (!"final_review".equals(String.valueOf(r.get("status")))) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许绩效校准");
     }
+    if (body.containsKey("approved") && Boolean.FALSE.equals(body.get("approved"))) {
+      return calibrateRollback(userId, id, body, r);
+    }
     String oldStatus = String.valueOf(r.get("status"));
-    boolean approved = Boolean.TRUE.equals(body.get("approved"));
-    String newStatus;
-    if (approved) {
-      newStatus = "issued";
-      if (body.containsKey("finalScore") && body.get("finalScore") instanceof Number) {
-        double finalScore = ((Number) body.get("finalScore")).doubleValue();
-        jdbc.update(
-            "UPDATE performance_record SET status=?, final_reviewer_id=?, final_reviewed_at=NOW(), total_score=?, score_grade=?, rejection_reason=NULL WHERE id=?",
-            newStatus,
-            userId,
-            finalScore,
-            scoreGradeFromTotal(finalScore),
-            id);
-      } else {
-        jdbc.update(
-            "UPDATE performance_record SET status=?, final_reviewer_id=?, final_reviewed_at=NOW(), rejection_reason=NULL WHERE id=?",
-            newStatus,
-            userId,
-            id);
-      }
-    } else {
-      newStatus =
-          body.get("returnToStage") == null ? "self_review" : String.valueOf(body.get("returnToStage"));
-      String rejectionReason =
-          body.get("rejectionReason") == null ? "校准未通过" : String.valueOf(body.get("rejectionReason"));
+    String newStatus = "issued";
+    if (body.containsKey("finalScore") && body.get("finalScore") instanceof Number) {
+      double finalScore = ((Number) body.get("finalScore")).doubleValue();
       jdbc.update(
-          "UPDATE performance_record SET status=?, final_reviewer_id=?, final_reviewed_at=NOW(), rejection_reason=? WHERE id=?",
+          "UPDATE performance_record SET status=?, final_reviewer_id=?, final_reviewed_at=NOW(), total_score=?, score_grade=?, rejection_reason=NULL WHERE id=?",
           newStatus,
           userId,
-          rejectionReason,
+          finalScore,
+          scoreGradeFromTotal(finalScore),
+          id);
+    } else {
+      jdbc.update(
+          "UPDATE performance_record SET status=?, final_reviewer_id=?, final_reviewed_at=NOW(), rejection_reason=NULL WHERE id=?",
+          newStatus,
+          userId,
           id);
     }
-    tryLogPerformanceFlow(
-        id,
-        oldStatus,
-        newStatus,
-        approved ? "calibrate_approve" : "calibrate_reject",
-        userId,
-        approved ? null : String.valueOf(body.get("rejectionReason")));
+    tryLogPerformanceFlow(id, oldStatus, newStatus, "calibrate_approve", userId, null);
     log.info("绩效 {} 校准完成，新状态: {}", id, newStatus);
-    try {
-      performanceFeishuTaskService.completeAllFinal(id);
-    } catch (Exception ex) {
-      log.warn("绩效飞书待办完成异常 record={}", id, ex);
-    }
-    try {
-      String rejectionReason =
-          approved
-              ? null
-              : (body.get("rejectionReason") == null ? "校准未通过" : String.valueOf(body.get("rejectionReason")));
-      performanceFeishuNotifier.notifyCalibrateToEmployee(r, id, approved, newStatus, rejectionReason);
-    } catch (Exception ex) {
-      log.warn("绩效飞书通知派发异常 record={}", id, ex);
-    }
+    final String recId = id;
+    final String calNewStatus = newStatus;
+    final Map<String, Object> recSnap = r;
+    feishuAsync.dispatch(
+        () -> {
+          try {
+            feishuAsync.taskService().completeAllFinal(recId);
+          } catch (Exception ex) {
+            log.warn("绩效飞书待办完成异常 record={}", recId, ex);
+          }
+          try {
+            feishuAsync.notifier().notifyCalibrateToEmployee(recSnap, recId, true, calNewStatus, null);
+          } catch (Exception ex) {
+            log.warn("绩效飞书通知派发异常 record={}", recId, ex);
+          }
+        });
+    scheduleFeishuBadgeAfterChange(id, userId);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("success", true);
     out.put("newStatus", newStatus);
@@ -2845,11 +3215,17 @@ public class PerformanceService {
     jdbc.update("UPDATE performance_record SET status=? WHERE id=?", "completed", id);
     tryLogPerformanceFlow(id, "issued", "completed", "confirm_result", userId, null);
     log.info("绩效 {} 员工确认结果，状态变更为 completed", id);
-    try {
-      performanceFeishuTaskService.completeConfirmForEmployee(id, userId);
-    } catch (Exception ex) {
-      log.warn("绩效飞书待办完成异常 record={}", id, ex);
-    }
+    final String recId = id;
+    final String empId = userId;
+    feishuAsync.dispatch(
+        () -> {
+          try {
+            feishuAsync.taskService().completeConfirmForEmployee(recId, empId);
+          } catch (Exception ex) {
+            log.warn("绩效飞书待办完成异常 record={}", recId, ex);
+          }
+        });
+    scheduleFeishuBadgeAfterChange(id, userId);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("success", true);
     out.put("newStatus", "completed");
@@ -2870,6 +3246,8 @@ public class PerformanceService {
 
     int created = 0;
     int skipped = 0;
+    List<PerformanceFeishuAsyncService.RecordCreatedItem> pendingFeishuCreates =
+        new ArrayList<PerformanceFeishuAsyncService.RecordCreatedItem>();
     for (Map<String, Object> emp : rows) {
       String employeeIdValue = String.valueOf(emp.get("employeeId"));
       String managerId = emp.get("managerId") == null ? null : String.valueOf(emp.get("managerId"));
@@ -2899,21 +3277,248 @@ public class PerformanceService {
           managerId,
           dottedManagerId);
       created++;
-      try {
-        log.info(
-            "月度绩效创建后触发飞书通知调用 employeeId={} recordId={} period={}",
-            employeeIdValue,
-            newId,
-            period);
-        performanceFeishuNotifier.notifyRecordCreated(employeeIdValue, newId, period);
-      } catch (Exception ex) {
-        log.warn("绩效飞书通知派发异常 record={}", newId, ex);
-      }
+      pendingFeishuCreates.add(
+          new PerformanceFeishuAsyncService.RecordCreatedItem(employeeIdValue, newId, period, null));
+    }
+    if (!pendingFeishuCreates.isEmpty()) {
+      feishuAsync.dispatchRecordCreatedBatch(pendingFeishuCreates);
     }
     log.info("月度绩效自动创建 period={} created={} skipped={}", period, created, skipped);
     Map<String, Object> out = new LinkedHashMap<String, Object>();
     out.put("created", created);
     out.put("skipped", skipped);
+    return out;
+  }
+
+  /** 计划执行中回退到自动推进前未完成节点（通常为目标设定/目标审核）。 */
+  public Map<String, Object> rollbackPlanToDeadlineAnchor(
+      String userId, String id, Map<String, Object> body) {
+    if (userId == null || userId.isEmpty()) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "请先登录");
+    }
+    Map<String, Object> r = loadRecord(id);
+    if (!"plan_execution".equals(String.valueOf(r.get("status")))) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许回退计划执行");
+    }
+    String employeeId = String.valueOf(r.get("employeeId"));
+    if (!userId.equals(employeeId) && !canCalibrateRecord(userId, r)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权回退计划执行");
+    }
+    String target = resolveDeadlineFlowAnchor(r, "goal_setting");
+    if (!isAllowedRollbackTarget(target) && !"goal_rejected".equals(target)) {
+      target = "goal_setting";
+    }
+    String deadlineOverride = parseRollbackDeadlineOverride(body);
+    String oldStatus = String.valueOf(r.get("status"));
+    if (deadlineOverride != null) {
+      Map<String, String> deadlines =
+          nodeDeadlineService.parseJson((String) r.get("nodeDeadlines"));
+      if (deadlines.isEmpty()) {
+        deadlines =
+            nodeDeadlineService.defaultDeadlinesForPeriod(String.valueOf(r.get("period")));
+      }
+      String deadlineKey = deadlineKeyForRollbackTarget(target);
+      deadlines.put(deadlineKey, deadlineOverride);
+      if (PerformanceNodeDeadlineService.KEY_GOAL.equals(deadlineKey)) {
+        deadlines.put(PerformanceNodeDeadlineService.KEY_PLAN, deadlineOverride);
+      }
+      String nodeDeadlinesJson = nodeDeadlineService.writeJson(deadlines);
+      jdbc.update(
+          "UPDATE performance_record SET status=?, node_deadlines=CAST(? AS JSON) WHERE id=?",
+          target,
+          nodeDeadlinesJson,
+          id);
+    } else {
+      jdbc.update("UPDATE performance_record SET status=? WHERE id=?", target, id);
+    }
+    tryLogPerformanceFlow(id, oldStatus, target, "rollback_plan_anchor", userId, deadlineOverride);
+    scheduleFeishuBadgeAfterChange(id, userId);
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("success", true);
+    out.put("newStatus", target);
+    out.put("deadlineFlowAnchor", target);
+    if (deadlineOverride != null) {
+      out.put("deadline", deadlineOverride);
+    }
+    return out;
+  }
+
+  private static String parseRollbackDeadlineOverride(Map<String, Object> body) {
+    if (body == null) {
+      return null;
+    }
+    Object raw = body.get("deadline");
+    if (raw == null) {
+      raw = body.get("nodeDeadline");
+    }
+    if (raw == null) {
+      return null;
+    }
+    String s = String.valueOf(raw).trim();
+    if (s.isEmpty()) {
+      return null;
+    }
+    try {
+      return java.time.LocalDate.parse(s, java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
+          .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE);
+    } catch (Exception e) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "截止时间格式无效，请使用 yyyy-MM-dd");
+    }
+  }
+
+  private static String deadlineKeyForRollbackTarget(String targetStatus) {
+    if ("self_review".equals(targetStatus)) {
+      return PerformanceNodeDeadlineService.KEY_SCORING;
+    }
+    if ("manager_review".equals(targetStatus)
+        || "dual_manager_review".equals(targetStatus)
+        || "dotted_manager_review".equals(targetStatus)) {
+      return PerformanceNodeDeadlineService.KEY_SCORING;
+    }
+    if ("final_review".equals(targetStatus)) {
+      return PerformanceNodeDeadlineService.KEY_FINAL;
+    }
+    return PerformanceNodeDeadlineService.KEY_GOAL;
+  }
+
+  private static String resolveDeadlineFlowAnchor(Map<String, Object> r, String fallback) {
+    Object anchor = r.get("deadlineFlowAnchor");
+    if (anchor != null && !String.valueOf(anchor).trim().isEmpty()) {
+      return String.valueOf(anchor).trim();
+    }
+    return fallback;
+  }
+
+  public Map<String, Object> startSelfReview(String userId, String id) {
+    Map<String, Object> r = loadRecord(id);
+    if (!userId.equals(String.valueOf(r.get("employeeId")))) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有本人可进入自评");
+    }
+    if (!"plan_execution".equals(String.valueOf(r.get("status")))) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "当前状态不允许进入自评");
+    }
+    throw new ResponseStatusException(
+        HttpStatus.FORBIDDEN, "计划执行中须由创建人下发员工自评，不可自行开始自评");
+  }
+
+  public Map<String, Object> issueSelfReview(String userId, String id) {
+    Map<String, Object> r = loadRecord(id);
+    if (!canIssueSelfReviewRecord(userId, r)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权下发员工自评");
+    }
+    transitionPlanExecutionToSelfReview(id, userId, "issue_self_review");
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("success", true);
+    out.put("newStatus", "self_review");
+    return out;
+  }
+
+  public Map<String, Object> batchIssueSelfReview(String userId, Map<String, Object> body) {
+    if (userId == null || userId.isEmpty()) {
+      throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录");
+    }
+    Object raw = body.get("recordIds");
+    if (raw == null) {
+      raw = body.get("ids");
+    }
+    if (!(raw instanceof List)) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请提供 recordIds 数组");
+    }
+    @SuppressWarnings("unchecked")
+    List<Object> ids = (List<Object>) raw;
+    int successCount = 0;
+    List<Map<String, Object>> failed = new ArrayList<Map<String, Object>>();
+    for (Object o : ids) {
+      String id = o == null ? "" : String.valueOf(o).trim();
+      if (id.isEmpty()) {
+        continue;
+      }
+      try {
+        issueSelfReview(userId, id);
+        successCount++;
+      } catch (ResponseStatusException ex) {
+        Map<String, Object> f = new LinkedHashMap<String, Object>();
+        f.put("id", id);
+        f.put("reason", ex.getReason());
+        failed.add(f);
+      } catch (Exception ex) {
+        Map<String, Object> f = new LinkedHashMap<String, Object>();
+        f.put("id", id);
+        f.put("reason", ex.getMessage() == null ? "下发失败" : ex.getMessage());
+        failed.add(f);
+      }
+    }
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("success", failed.isEmpty());
+    out.put("successCount", successCount);
+    out.put("failed", failed);
+    return out;
+  }
+
+  public Map<String, Object> calibrateRollback(
+      String userId, String id, Map<String, Object> body, Map<String, Object> r) {
+    String target =
+        body.get("returnToStage") == null ? "" : String.valueOf(body.get("returnToStage")).trim();
+    if (target.isEmpty() || "auto".equalsIgnoreCase(target)) {
+      target = resolveDeadlineFlowAnchor(r, "self_review");
+    }
+    if (!isAllowedRollbackTarget(target)) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持的回退节点: " + target);
+    }
+    String deadlineOverride = parseRollbackDeadlineOverride(body);
+    String oldStatus = String.valueOf(r.get("status"));
+    String reason =
+        body.get("rejectionReason") == null ? "校准回退" : String.valueOf(body.get("rejectionReason"));
+    List<String> setParts = new ArrayList<String>();
+    List<Object> setArgs = new ArrayList<Object>();
+    setParts.add("status=?");
+    setArgs.add(target);
+    setParts.add("rejection_reason=?");
+    setArgs.add(reason);
+    if (deadlineOverride != null) {
+      Map<String, String> deadlines =
+          nodeDeadlineService.parseJson((String) r.get("nodeDeadlines"));
+      if (deadlines.isEmpty()) {
+        deadlines =
+            nodeDeadlineService.defaultDeadlinesForPeriod(String.valueOf(r.get("period")));
+      }
+      String deadlineKey = deadlineKeyForRollbackTarget(target);
+      deadlines.put(deadlineKey, deadlineOverride);
+      if (PerformanceNodeDeadlineService.KEY_GOAL.equals(deadlineKey)) {
+        deadlines.put(PerformanceNodeDeadlineService.KEY_PLAN, deadlineOverride);
+      }
+      setParts.add("node_deadlines=CAST(? AS JSON)");
+      setArgs.add(nodeDeadlineService.writeJson(deadlines));
+    }
+    appendCalibrateRollbackReviewReset(setParts, target, oldStatus, r);
+    setArgs.add(id);
+    jdbc.update(
+        "UPDATE performance_record SET " + String.join(", ", setParts) + " WHERE id=?",
+        setArgs.toArray());
+    tryLogPerformanceFlow(id, oldStatus, target, "calibrate_rollback", userId, reason);
+    scheduleFeishuBadgeAfterChange(id, userId);
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("success", true);
+    out.put("newStatus", target);
+    if (deadlineOverride != null) {
+      out.put("deadline", deadlineOverride);
+    }
+    return out;
+  }
+
+  private static boolean isAllowedRollbackTarget(String status) {
+    return "goal_setting".equals(status)
+        || "goal_pending_review".equals(status)
+        || "plan_execution".equals(status)
+        || "self_review".equals(status)
+        || "manager_review".equals(status)
+        || "dual_manager_review".equals(status)
+        || "dotted_manager_review".equals(status);
+  }
+
+  public Map<String, Object> defaultNodeDeadlinesForPeriod(String period) {
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("nodeDeadlines", nodeDeadlineService.defaultDeadlinesForPeriod(period));
     return out;
   }
 }

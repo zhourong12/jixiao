@@ -28,7 +28,8 @@ public final class MenuKeys {
               "admin_departments",
               "admin_roles",
               "admin_permissions",
-              "admin_statistics_months"));
+              "admin_statistics_months",
+              "admin_api_tokens"));
 
   private MenuKeys() {}
 

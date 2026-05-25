@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import UserDisplay from "@/components/business-ui/UserDisplay.vue";
 import { performanceDetailCopy as c } from "@/composables/performanceDetailCopy";
 import type { CultureDimensionDef, CultureReviewItem, PerformanceIndicator, PerformanceRecord, ReviewItem } from "@/types/api.interface";
-import { calcWeightedScore, round2, scoreGradeFromTotal } from "@/utils/performanceScoringMerge";
+import { applySchemeWeightPortion, calcWeightedScore, scoreGradeFromTotal } from "@/utils/performanceScoringMerge";
 
 type FormRow = { indicatorName: string; score?: number; comment: string };
 
@@ -16,13 +16,18 @@ const props = defineProps<{
   matrixEditSelf: boolean;
   matrixEditManager: boolean;
   matrixEditDotted: boolean;
+  dualSupervisorEdit?: boolean;
   readonlyReviewTotals: { self: number | null; manager: number | null; dotted: number | null };
   previewEditingTotal: number | null;
+  previewManagerEditingTotal?: number | null;
+  previewDottedEditingTotal?: number | null;
   previewMergedByIndex: (index: number) => number | null;
   previewMergedCultureByName: (dimensionName: string) => number | null;
   previewMergedCultureSum: number | null;
   previewMergedLearningByName: (dimName: string) => number | null;
   previewReviewMergedTotal: number | null;
+  /** 与详情页基本信息/校准区一致的总分；有值时优先于组件内自行推算 */
+  displayMergedTotalScore?: number | null;
   previewReviewMergedPerfOnlyTotal: number | null;
   matrixTemplateTotals: { self: number | null; manager: number | null; dotted: number | null };
   reviewFormTitle: string;
@@ -30,8 +35,15 @@ const props = defineProps<{
 }>();
 
 const formContent = defineModel<FormRow[]>("formContent", { required: true });
+const dottedFormContent = defineModel<FormRow[]>("dottedFormContent", { default: () => [] });
 const cultureForm = defineModel<CultureReviewItem[]>("cultureForm", { required: true });
+const dottedCultureForm = defineModel<CultureReviewItem[]>("dottedCultureForm", { default: () => [] });
 const learningForm = defineModel<CultureReviewItem[]>("learningForm", { required: true });
+const dottedLearningForm = defineModel<CultureReviewItem[]>("dottedLearningForm", { default: () => [] });
+
+const useSplitDottedForms = computed(
+  () => !!(props.dualSupervisorEdit && props.matrixEditManager && props.matrixEditDotted && props.rec.dottedManagerId),
+);
 const personalSummary = defineModel<string>("personalSummary", { required: true });
 const managerSummary = defineModel<string>("managerSummary", { required: true });
 const dottedManagerSummary = defineModel<string>("dottedManagerSummary", { required: true });
@@ -53,8 +65,22 @@ function cultureLine(list: CultureReviewItem[] | undefined, name: string) {
   return list?.find((x) => x.name === name);
 }
 
-function handleScoreChange(index: number, value: string) {
-  const next = [...formContent.value];
+function blockDecimalScoreKeydown(e: KeyboardEvent) {
+  if ([".", ",", "e", "E", "+", "-"].includes(e.key)) {
+    e.preventDefault();
+  }
+}
+
+function parseScoreAsInteger(value: string): number | null {
+  if (value.trim() === "") return null;
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n);
+}
+
+function handleScoreChange(index: number, value: string, target: "manager" | "dotted" = "manager") {
+  const source = target === "dotted" && useSplitDottedForms.value ? dottedFormContent : formContent;
+  const next = [...source.value];
   const row = next[index]!;
   const ind = props.indicators[index];
   if (!ind) return;
@@ -62,15 +88,18 @@ function handleScoreChange(index: number, value: string) {
   if (value === "") {
     next[index] = { indicatorName: row.indicatorName, comment: row.comment };
   } else {
-    const n = parseFloat(value);
-    if (!Number.isFinite(n)) {
+    const n = parseScoreAsInteger(value);
+    if (n === null) {
       next[index] = { ...row, score: undefined };
     } else {
-      const clamped = Math.min(cap, Math.max(0, n));
-      next[index] = { ...row, score: Math.round(clamped * 100) / 100 };
+      next[index] = { ...row, score: Math.min(cap, Math.max(0, n)) };
     }
   }
-  formContent.value = next;
+  source.value = next;
+}
+
+function dottedPerfRow(index: number) {
+  return useSplitDottedForms.value ? dottedFormContent.value[index] : formContent.value[index];
 }
 
 function mergedDisplayForIndicator(index: number, name: string) {
@@ -85,12 +114,16 @@ function mergedDisplayForIndicator(index: number, name: string) {
 }
 
 const displayMatrixMergedTotal = computed(() => {
-  const r = props.rec;
   const p = props.previewReviewMergedTotal;
   if (props.matrixEditManager || props.matrixEditDotted) {
-    return p;
+    if (p != null && !Number.isNaN(p)) return p;
+    return null;
+  }
+  if (props.displayMergedTotalScore != null && !Number.isNaN(props.displayMergedTotalScore)) {
+    return props.displayMergedTotalScore;
   }
   if (p != null) return p;
+  const r = props.rec;
   return r.reviewMergedTotal ?? r.totalScore ?? null;
 });
 
@@ -150,9 +183,9 @@ function handleLearningScoreChange(idx: number, value: string) {
   if (value === "") {
     next[idx] = { ...row, score: 0 };
   } else {
-    const n = parseFloat(value);
-    if (!Number.isFinite(n)) return;
-    next[idx] = { ...row, score: Math.min(100, Math.max(0, Math.round(n * 100) / 100)) };
+    const n = parseScoreAsInteger(value);
+    if (n === null) return;
+    next[idx] = { ...row, score: Math.min(100, Math.max(0, n)) };
   }
   learningForm.value = next;
 }
@@ -162,14 +195,24 @@ function learningLine(list: ReviewItem[] | undefined, name: string) {
 }
 
 /** 学习与成长：各分项得分按模板权重加权平均（与后端 calcWeightedScore 一致） */
-function learningWeightedForRole(review: ReviewItem[] | undefined, editFlag: boolean): number | null {
+function learningWeightedForRole(
+  review: ReviewItem[] | undefined,
+  editFlag: boolean,
+  role: "self" | "manager" | "dotted" = "manager",
+): number | null {
   const inds = props.learningDimensions;
   if (!inds.length) return null;
   const items: ReviewItem[] = [];
   for (const ind of inds) {
     let sc: number | undefined;
     if (editFlag) {
-      const row = learningForm.value.find((x) => x.name === ind.name);
+      const list =
+        role === "dotted" && useSplitDottedForms.value
+          ? dottedLearningForm.value
+          : role === "self"
+            ? learningForm.value
+            : learningForm.value;
+      const row = list.find((x) => x.name === ind.name);
       sc = row?.score as number | undefined;
     } else {
       const row = review?.find(
@@ -183,10 +226,16 @@ function learningWeightedForRole(review: ReviewItem[] | undefined, editFlag: boo
   return calcWeightedScore(items, inds);
 }
 
-const learningSelfWeighted = computed(() => learningWeightedForRole(props.rec.learningSelfReview, props.matrixEditSelf));
-const learningManagerWeighted = computed(() => learningWeightedForRole(props.rec.learningManagerReview, props.matrixEditManager));
+const learningSelfWeighted = computed(() =>
+  learningWeightedForRole(props.rec.learningSelfReview, props.matrixEditSelf, "self"),
+);
+const learningManagerWeighted = computed(() =>
+  learningWeightedForRole(props.rec.learningManagerReview, props.matrixEditManager, "manager"),
+);
 const learningDottedWeighted = computed(() =>
-  props.rec.dottedManagerId ? learningWeightedForRole(props.rec.learningDottedManagerReview, props.matrixEditDotted) : null,
+  props.rec.dottedManagerId
+    ? learningWeightedForRole(props.rec.learningDottedManagerReview, props.matrixEditDotted, "dotted")
+    : null,
 );
 
 const learningMergedWeighted = computed((): number | null => {
@@ -203,10 +252,9 @@ const learningMergedWeighted = computed((): number | null => {
 
 /** 总分行：分项加权平均后再乘方案「学习与成长」占比（与综合分公式一致）；无方案占比时仍为百分制加权平均 */
 function applyLearningSchemeWeight(internalRate: number | null): number | null {
-  if (internalRate === null) return null;
   const sw = props.scoringWeights;
   if (sw != null && sw.learning > 0) {
-    return round2(internalRate * (sw.learning / 100));
+    return applySchemeWeightPortion(internalRate, sw.learning);
   }
   return internalRate;
 }
@@ -236,19 +284,34 @@ function displayLearningMergedDimension(dimName: string): number | null {
   return null;
 }
 
-function handleCultureScoreChange(idx: number, value: string, maxScore: number) {
-  const row = cultureForm.value[idx];
+function handleCultureScoreChange(idx: number, value: string, maxScore: number, target: "manager" | "dotted" = "manager") {
+  const source = target === "dotted" && useSplitDottedForms.value ? dottedCultureForm : cultureForm;
+  const row = source.value[idx];
   if (!row) return;
-  const next = [...cultureForm.value];
+  const next = [...source.value];
   if (value === "") {
     next[idx] = { ...row, score: 0 };
   } else {
-    const n = parseFloat(value);
-    if (!Number.isFinite(n)) return;
-    const c = Math.min(maxScore, Math.max(0, n));
-    next[idx] = { ...row, score: Math.round(c) };
+    const n = parseScoreAsInteger(value);
+    if (n === null) return;
+    next[idx] = { ...row, score: Math.min(maxScore, Math.max(0, n)) };
   }
-  cultureForm.value = next;
+  source.value = next;
+}
+
+function handleLearningScoreChangeForRole(idx: number, value: string, target: "manager" | "dotted") {
+  const source = target === "dotted" && useSplitDottedForms.value ? dottedLearningForm : learningForm;
+  const row = source.value[idx];
+  if (!row) return;
+  const next = [...source.value];
+  if (value === "") {
+    next[idx] = { ...row, score: 0 };
+  } else {
+    const n = parseScoreAsInteger(value);
+    if (n === null) return;
+    next[idx] = { ...row, score: Math.min(100, Math.max(0, n)) };
+  }
+  source.value = next;
 }
 
 function cultureSum(list: CultureReviewItem[] | undefined, defs: CultureDimensionDef[]): number | null {
@@ -269,7 +332,12 @@ const cultureManagerSum = computed(() =>
   props.matrixEditManager ? cultureSum(cultureForm.value, props.cultureDimensions) : cultureSum(props.rec.cultureManagerReview, props.cultureDimensions),
 );
 const cultureDottedSum = computed(() =>
-  props.matrixEditDotted ? cultureSum(cultureForm.value, props.cultureDimensions) : cultureSum(props.rec.cultureDottedManagerReview, props.cultureDimensions),
+  props.matrixEditDotted
+    ? cultureSum(
+        useSplitDottedForms.value ? dottedCultureForm.value : cultureForm.value,
+        props.cultureDimensions,
+      )
+    : cultureSum(props.rec.cultureDottedManagerReview, props.cultureDimensions),
 );
 
 function selfFinalScore() {
@@ -278,14 +346,105 @@ function selfFinalScore() {
 }
 
 function managerFinalScore() {
-  if (props.matrixEditManager) return props.previewEditingTotal;
+  if (props.matrixEditManager) {
+    return props.previewManagerEditingTotal ?? props.previewEditingTotal;
+  }
   return props.readonlyReviewTotals.manager;
 }
 
 function dottedFinalScore() {
-  if (props.matrixEditDotted) return props.previewEditingTotal;
+  if (props.matrixEditDotted) {
+    if (useSplitDottedForms.value) {
+      return props.previewDottedEditingTotal ?? props.previewEditingTotal;
+    }
+    return props.previewEditingTotal;
+  }
   return props.readonlyReviewTotals.dotted;
 }
+
+type MatrixSectionId = "perf" | "culture" | "learning" | "final";
+
+const activeMatrixSection = ref<MatrixSectionId>("final");
+
+const matrixNavItems = computed(() => {
+  const items: { id: MatrixSectionId; href: string; label: string }[] = [];
+  if (showPerf.value) {
+    items.push({ id: "perf", href: "#matrix-perf", label: navLabel(c.matrixNavPerf, "performance") });
+  }
+  if (showCulture.value) {
+    items.push({ id: "culture", href: "#matrix-culture", label: navLabel(c.matrixNavCulture, "culture") });
+  }
+  if (showLearning.value) {
+    items.push({ id: "learning", href: "#matrix-learning", label: navLabel(c.matrixNavLearning, "learning") });
+  }
+  items.push({ id: "final", href: "#matrix-final", label: c.matrixNavFinal });
+  return items;
+});
+
+function sectionIdFromElementId(elementId: string): MatrixSectionId | null {
+  switch (elementId) {
+    case "matrix-perf":
+      return "perf";
+    case "matrix-culture":
+      return "culture";
+    case "matrix-learning":
+      return "learning";
+    case "matrix-final":
+      return "final";
+    default:
+      return null;
+  }
+}
+
+function matrixNavClass(id: MatrixSectionId) {
+  return activeMatrixSection.value === id
+    ? "border-l-2 border-primary bg-primary/10 pl-[calc(0.5rem-2px)] font-semibold text-primary"
+    : "border-l-2 border-transparent pl-2 text-muted-foreground hover:bg-muted/60 hover:text-foreground";
+}
+
+let matrixSectionObserver: IntersectionObserver | null = null;
+
+function bindMatrixSectionObserver() {
+  matrixSectionObserver?.disconnect();
+  const ids = matrixNavItems.value.map((item) => item.href.replace(/^#/, ""));
+  const elements = ids.map((id) => document.getElementById(id)).filter((el): el is HTMLElement => !!el);
+  if (!elements.length) return;
+
+  matrixSectionObserver = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+      if (!visible.length) return;
+      const sid = sectionIdFromElementId(visible[0]!.target.id);
+      if (sid) activeMatrixSection.value = sid;
+    },
+    { root: null, rootMargin: "-15% 0px -55% 0px", threshold: [0.08, 0.2, 0.4] },
+  );
+  for (const el of elements) matrixSectionObserver.observe(el);
+}
+
+function onMatrixNavClick(id: MatrixSectionId) {
+  activeMatrixSection.value = id;
+}
+
+onMounted(() => {
+  const first = matrixNavItems.value[0];
+  if (first) activeMatrixSection.value = first.id;
+  bindMatrixSectionObserver();
+});
+
+onUnmounted(() => {
+  matrixSectionObserver?.disconnect();
+  matrixSectionObserver = null;
+});
+
+watch(matrixNavItems, () => {
+  if (!matrixNavItems.value.some((item) => item.id === activeMatrixSection.value)) {
+    activeMatrixSection.value = matrixNavItems.value[0]?.id ?? "final";
+  }
+  bindMatrixSectionObserver();
+});
 </script>
 
 <template>
@@ -295,16 +454,26 @@ function dottedFinalScore() {
 
     <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
       <aside class="shrink-0 space-y-1 border-b border-border pb-4 lg:w-44 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
-        <a v-if="showPerf" href="#matrix-perf" class="block rounded-md px-2 py-1.5 text-sm text-primary hover:bg-accent">{{ navLabel(c.matrixNavPerf, 'performance') }}</a>
-        <a v-if="showCulture" href="#matrix-culture" class="block rounded-md px-2 py-1.5 text-sm text-primary hover:bg-accent">{{ navLabel(c.matrixNavCulture, 'culture') }}</a>
-        <a v-if="showLearning" href="#matrix-learning" class="block rounded-md px-2 py-1.5 text-sm text-primary hover:bg-accent">{{ navLabel(c.matrixNavLearning, 'learning') }}</a>
-        <a href="#matrix-final" class="block rounded-md px-2 py-1.5 text-sm text-primary hover:bg-accent">{{ c.matrixNavFinal }}</a>
+        <a
+          v-for="item in matrixNavItems"
+          :key="item.id"
+          :href="item.href"
+          class="block rounded-md py-1.5 pr-2 text-sm transition-colors"
+          :class="matrixNavClass(item.id)"
+          :aria-current="activeMatrixSection === item.id ? 'location' : undefined"
+          @click="onMatrixNavClick(item.id)"
+        >
+          {{ item.label }}
+        </a>
       </aside>
 
       <div class="min-w-0 flex-1 space-y-10">
         <div v-if="showPerf" id="matrix-perf" class="scroll-mt-28">
           <h3 class="mb-1 text-sm font-semibold">{{ navLabel(c.matrixNavPerf, 'performance') }}</h3>
-          <p class="mb-2 text-xs text-muted-foreground">{{ c.matrixPerfCalcHint }}</p>
+          <p v-if="scoringWeights && scoringWeights.performance > 0" class="mb-2 text-xs text-muted-foreground">
+            {{ c.matrixPerfCalcHint }}；总分行已乘方案绩效占比（{{ scoringWeights.performance }}%），与同表综合分中绩效部分一致。
+          </p>
+          <p v-else class="mb-2 text-xs text-muted-foreground">{{ c.matrixPerfCalcHint }}</p>
           <div
             class="w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain rounded-md border border-border bg-card shadow-sm [-webkit-overflow-scrolling:touch]"
           >
@@ -356,13 +525,13 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditSelf"
                       type="number"
-                      inputmode="decimal"
-                      step="any"
+                      step="1"
                       min="0"
                       :max="indicatorMaxScore(indicator)"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
                       :value="formContent[index]?.score === undefined ? '' : String(formContent[index]!.score)"
                       :placeholder="c.scorePlaceholder"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
                       @input="handleScoreChange(index, ($event.target as HTMLInputElement).value)"
                     />
@@ -374,13 +543,13 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditManager"
                       type="number"
-                      inputmode="decimal"
-                      step="any"
+                      step="1"
                       min="0"
                       :max="indicatorMaxScore(indicator)"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
                       :value="formContent[index]?.score === undefined ? '' : String(formContent[index]!.score)"
                       :placeholder="c.scorePlaceholder"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
                       @input="handleScoreChange(index, ($event.target as HTMLInputElement).value)"
                     />
@@ -392,15 +561,15 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditDotted"
                       type="number"
-                      inputmode="decimal"
-                      step="any"
+                      step="1"
                       min="0"
                       :max="indicatorMaxScore(indicator)"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
-                      :value="formContent[index]?.score === undefined ? '' : String(formContent[index]!.score)"
+                      :value="dottedPerfRow(index)?.score === undefined ? '' : String(dottedPerfRow(index)!.score)"
                       :placeholder="c.scorePlaceholder"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
-                      @input="handleScoreChange(index, ($event.target as HTMLInputElement).value)"
+                      @input="handleScoreChange(index, ($event.target as HTMLInputElement).value, 'dotted')"
                     />
                     <span v-else class="inline-block min-h-11 min-w-[7.5rem] px-2 py-2 text-center text-base font-semibold tabular-nums text-primary">{{
                       formatScore(reviewLine(rec.dottedManagerReview, indicator.name)?.score)
@@ -488,12 +657,12 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditSelf"
                       type="number"
-                      inputmode="numeric"
                       step="1"
                       min="0"
                       :max="item.maxScore"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
                       :value="cultureForm[idx]?.score ?? ''"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
                       @input="handleCultureScoreChange(idx, ($event.target as HTMLInputElement).value, item.maxScore)"
                     />
@@ -505,12 +674,12 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditManager"
                       type="number"
-                      inputmode="numeric"
                       step="1"
                       min="0"
                       :max="item.maxScore"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
                       :value="cultureForm[idx]?.score ?? ''"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
                       @input="handleCultureScoreChange(idx, ($event.target as HTMLInputElement).value, item.maxScore)"
                     />
@@ -522,14 +691,14 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditDotted"
                       type="number"
-                      inputmode="numeric"
                       step="1"
                       min="0"
                       :max="item.maxScore"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
-                      :value="cultureForm[idx]?.score ?? ''"
+                      :value="(useSplitDottedForms ? dottedCultureForm[idx] : cultureForm[idx])?.score ?? ''"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
-                      @input="handleCultureScoreChange(idx, ($event.target as HTMLInputElement).value, item.maxScore)"
+                      @input="handleCultureScoreChange(idx, ($event.target as HTMLInputElement).value, item.maxScore, 'dotted')"
                     />
                     <span v-else class="inline-block min-h-11 min-w-[7.5rem] px-2 py-2 text-center text-base font-semibold tabular-nums text-primary">{{
                       formatScore(cultureLine(rec.cultureDottedManagerReview, item.name)?.score)
@@ -613,12 +782,12 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditSelf"
                       type="number"
-                      inputmode="decimal"
-                      step="any"
+                      step="1"
                       min="0"
                       max="100"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
                       :value="learningForm[idx]?.score ?? ''"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
                       @input="handleLearningScoreChange(idx, ($event.target as HTMLInputElement).value)"
                     />
@@ -630,12 +799,12 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditManager"
                       type="number"
-                      inputmode="decimal"
-                      step="any"
+                      step="1"
                       min="0"
                       max="100"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
                       :value="learningForm[idx]?.score ?? ''"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
                       @input="handleLearningScoreChange(idx, ($event.target as HTMLInputElement).value)"
                     />
@@ -647,14 +816,14 @@ function dottedFinalScore() {
                     <input
                       v-if="matrixEditDotted"
                       type="number"
-                      inputmode="decimal"
-                      step="any"
+                      step="1"
                       min="0"
                       max="100"
                       class="mx-auto block min-h-11 min-w-[7.5rem] rounded-md border border-border bg-card px-3 py-2 text-center text-base tabular-nums shadow-sm"
-                      :value="learningForm[idx]?.score ?? ''"
+                      :value="(useSplitDottedForms ? dottedLearningForm[idx] : learningForm[idx])?.score ?? ''"
+                      @keydown="blockDecimalScoreKeydown"
                       @wheel.prevent
-                      @input="handleLearningScoreChange(idx, ($event.target as HTMLInputElement).value)"
+                      @input="handleLearningScoreChangeForRole(idx, ($event.target as HTMLInputElement).value, 'dotted')"
                     />
                     <span v-else class="inline-block min-h-11 min-w-[7.5rem] px-2 py-2 text-center text-base font-semibold tabular-nums text-primary">{{
                       formatScore(learningLine(rec.learningDottedManagerReview, dim.name)?.score)
@@ -702,7 +871,9 @@ function dottedFinalScore() {
                   <th rowspan="2" class="border-l border-border p-3 text-center align-middle text-sm font-medium">{{ c.matrixColGrade }}</th>
                 </tr>
                 <tr class="border-b border-border bg-muted/30 text-xs text-muted-foreground">
-                  <th class="border-l border-border p-3 text-center font-normal">{{ c.matrixScoreDetail }}</th>
+                  <th class="border-l border-border p-3 text-center font-normal">
+                    {{ c.matrixScoreDetail }}<span v-if="matrixEditSelf" class="text-destructive">*</span>
+                  </th>
                   <th class="min-w-[6.5rem] whitespace-nowrap p-3 text-center font-normal">{{ c.matrixScoreLabel }}</th>
                   <th class="border-l border-border p-3 text-center font-normal">{{ c.matrixScoreDetail }}</th>
                   <th class="min-w-[6.5rem] whitespace-nowrap p-3 text-center font-normal">{{ c.matrixScoreLabel }}</th>

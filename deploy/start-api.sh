@@ -1,27 +1,54 @@
 #!/usr/bin/env bash
-# 正式（默认）：./deploy/start-api.sh          -> deploy/.env
-# 测试：      DEPLOY_ENV=test ./deploy/start-api.sh -> deploy/.env-test
+# 正式环境后端（单文件，无额外 source）
+#   cp deploy/.env.example deploy/.env
+#   ./deploy/start-api.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=lib-env.sh
-. "$(dirname "$0")/lib-env.sh"
 
+# ---------- 正式环境参数 ----------
+APP_ORIGIN="https://kpi.ccka.com"
+API_PORT=8081
+RUNTIME_DIR="$ROOT/deploy/runtime"
+LOG_DIR="$RUNTIME_DIR/logs"
+PID_FILE="$RUNTIME_DIR/api.pid"
+LOG_RETENTION_DAYS=15
+JIXIAO2_JDBC_URL="jdbc:mysql://127.0.0.1:3306/jixiao?characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true"
+ENV_FILE="$ROOT/deploy/.env"
 JAR="${JAR:-$ROOT/dist/server/server-0.0.1-SNAPSHOT.jar}"
-ENV_FILE="$(deploy_resolve_env_file "$ROOT")"
-DEPLOY_ENV="${DEPLOY_ENV:-prod}"
 JAVA_OPTS="${JAVA_OPTS:--XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0}"
-API_PORT="${API_PORT:-8081}"
-LOG="${LOG:-$ROOT/deploy/runtime/api.log}"
-PID_FILE="${PID_FILE:-$ROOT/deploy/runtime/api.pid}"
 
-if [ ! -f "$JAR" ]; then
-  echo "未找到 JAR：$JAR" >&2
-  exit 1
+daily_log_file() {
+  mkdir -p "$LOG_DIR"
+  printf '%s/api-%s.log\n' "$LOG_DIR" "$(date +%F)"
+}
+
+prune_old_logs() {
+  [ -d "$LOG_DIR" ] || return 0
+  find "$LOG_DIR" -maxdepth 1 -type f -name 'api-*.log' -mtime +"${LOG_RETENTION_DAYS}" -delete 2>/dev/null || true
+}
+
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
 fi
 
-deploy_load_env_file "$ENV_FILE"
-echo "部署环境：$DEPLOY_ENV，配置文件：$ENV_FILE"
+# 正式环境：端口 / 域名相关项由脚本固定，无需在 .env 重复配置
+API_PORT=8081
+export API_PORT SERVER_PORT="$API_PORT" JIXIAO2_JDBC_URL
+export JIXIAO2_PUBLIC_APP_URL="$APP_ORIGIN"
+export FEISHU_REDIRECT_URI="${APP_ORIGIN}/feishu-callback"
+export JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS="https://kpi.ccka.com,http://kpi.ccka.com,http://localhost:*,http://127.0.0.1:*"
+
+LOG="$(daily_log_file)"
+prune_old_logs
+
+if [ ! -f "$JAR" ]; then
+  echo "未找到 JAR：$JAR，请先 npm run build:prod" >&2
+  exit 1
+fi
 
 if [ -z "${SESSION_JWT_SECRET:-}" ]; then
   echo "请先在 $ENV_FILE 配置 SESSION_JWT_SECRET" >&2
@@ -29,7 +56,7 @@ if [ -z "${SESSION_JWT_SECRET:-}" ]; then
 fi
 
 if ! command -v java >/dev/null 2>&1; then
-  echo "未找到 java 命令，请先安装 Java 8 运行环境" >&2
+  echo "未找到 java 命令" >&2
   exit 1
 fi
 
@@ -68,15 +95,21 @@ stop_api() {
   fi
 }
 
+echo "环境：正式"
+echo "站点：$APP_ORIGIN"
+echo "配置：$ENV_FILE（仅密钥/飞书 app 等）"
+echo "数据库：$JIXIAO2_JDBC_URL"
+echo "监听端口：$API_PORT"
+echo "日志目录：$LOG_DIR（保留 ${LOG_RETENTION_DAYS} 天）"
+echo "当日日志：$LOG"
+
 if [ "${BACKGROUND:-1}" = "1" ]; then
-  mkdir -p "$(dirname "$LOG")"
   stop_api
   nohup java $JAVA_OPTS -jar "$JAR" >>"$LOG" 2>&1 &
   echo $! >"$PID_FILE"
   echo "后端已重启，PID=$(cat "$PID_FILE")"
-  echo "日志：$LOG"
   exit 0
 fi
 
 stop_api
-exec java $JAVA_OPTS -jar "$JAR"
+exec java $JAVA_OPTS -Dserver.port="$API_PORT" -jar "$JAR"

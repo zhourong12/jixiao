@@ -117,6 +117,9 @@ CREATE TABLE `performance_record` (
   `learning_template_id` varchar(36) DEFAULT NULL COMMENT '创建时使用的学习模板ID',
   `assessment_rule_id` varchar(36) DEFAULT NULL,
   `period` varchar(50) NOT NULL,
+  `node_deadlines` json DEFAULT NULL COMMENT '各流程节点截止日期',
+  `deadline_notify_sent` json DEFAULT NULL COMMENT '截止日飞书提醒已推送记录',
+  `deadline_flow_anchor` varchar(50) DEFAULT NULL COMMENT '自动推进前状态，供计划执行/校准回退恢复',
   `status` varchar(50) DEFAULT 'goal_setting',
   `manager_id` varchar(255) NOT NULL,
   `dotted_manager_id` varchar(255) DEFAULT NULL,
@@ -143,6 +146,7 @@ CREATE TABLE `performance_record` (
   `dotted_manager_summary` text DEFAULT NULL,
   `final_reviewer_id` varchar(255) DEFAULT NULL,
   `final_reviewed_at` datetime DEFAULT NULL,
+  `calibration_owner_id` varchar(255) DEFAULT NULL COMMENT '创建该绩效的管理员，默认负责校准',
   `deleted_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_performance_record_employee` (`employee_id`),
@@ -244,6 +248,20 @@ CREATE TABLE `role_menu` (
   PRIMARY KEY (`role_key`, `menu_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+DROP TABLE IF EXISTS `api_token`;
+CREATE TABLE `api_token` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `token` varchar(64) NOT NULL COMMENT '随机 hex token',
+  `name` varchar(100) NOT NULL COMMENT '标签名称',
+  `user_id` varchar(100) NOT NULL COMMENT '创建者 user_id，Token 继承其角色',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `expires_at` datetime DEFAULT NULL COMMENT 'NULL=永不过期',
+  `last_used_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_api_token_token` (`token`),
+  KEY `idx_api_token_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 INSERT INTO `role` (`role_key`, `name`, `is_system`, `sort_order`) VALUES
   ('employee', '员工', 1, 1),
   ('admin', '管理员', 1, 2),
@@ -266,13 +284,14 @@ INSERT INTO `menu` (`menu_key`, `name`, `sort_order`) VALUES
   ('admin_roles', '角色管理', 9),
   ('admin_permissions', '权限管理', 10),
   ('admin_statistics_months', '周期与评选', 11),
-  ('admin_performance_feishu_task', '飞书绩效待办', 15);
+  ('admin_performance_feishu_task', '系统配置', 15),
+  ('admin_api_tokens', 'API Token', 16);
 
 INSERT INTO `role_menu` (`role_key`, `menu_key`, `allowed`)
 SELECT 'super_admin', `menu_key`, 1 FROM `menu`;
 
 INSERT INTO `role_menu` (`role_key`, `menu_key`, `allowed`)
-SELECT 'admin', m.`menu_key`, CASE WHEN m.`menu_key` IN ('todo', 'admin_permissions', 'admin_roles', 'performance_export', 'performance_batch_create', 'admin_performance_calibration') THEN 0 ELSE 1 END
+SELECT 'admin', m.`menu_key`, CASE WHEN m.`menu_key` IN ('todo', 'admin_permissions', 'admin_roles', 'performance_export', 'performance_batch_create', 'admin_performance_calibration', 'admin_api_tokens') THEN 0 ELSE 1 END
 FROM `menu` m;
 
 INSERT INTO `role_menu` (`role_key`, `menu_key`, `allowed`) VALUES
@@ -291,7 +310,8 @@ INSERT INTO `role_menu` (`role_key`, `menu_key`, `allowed`) VALUES
   ('employee', 'admin_permissions', 0),
   ('employee', 'admin_statistics_months', 0),
   ('employee', 'admin_performance_feishu_task', 0),
-  ('employee', 'admin_performance_calibration', 0);
+  ('employee', 'admin_performance_calibration', 0),
+  ('employee', 'admin_api_tokens', 0);
 
 -- ---------------------------------------------------------------------------
 -- 评选周期 / 奖项 / 获奖记录
@@ -563,7 +583,9 @@ INSERT INTO `system_config` (`config_key`, `config_value`) VALUES
   ('manager_review_weight', '0.7'),
   ('dotted_manager_review_weight', '0.3'),
   ('performance_calibration_assignee_ids', '[]'),
-  ('performance_feishu_task_enabled', '1')
+  ('performance_feishu_task_enabled', '1'),
+  ('feishu_app_badge_enabled', '1'),
+  ('password_login_enabled', '0')
 ON DUPLICATE KEY UPDATE `config_value` = VALUES(`config_value`);
 
 SET FOREIGN_KEY_CHECKS = 1;

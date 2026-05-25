@@ -10,6 +10,7 @@ export type PerformanceDetailStep = {
 export const PERFORMANCE_DETAIL_STEPS: PerformanceDetailStep[] = [
   { key: "goal", label: "目标设定", statuses: ["goal_setting", "goal_rejected", "template_selection"] },
   { key: "goal_review", label: "目标审核", statuses: ["goal_pending_review"] },
+  { key: "plan", label: "计划执行中", statuses: ["plan_execution"] },
   { key: "self", label: "员工自评", statuses: ["self_review"] },
   {
     key: "manager",
@@ -45,6 +46,11 @@ export const PERFORMANCE_DETAIL_STATUS: Record<
     description: "目标需修改后重新提交",
     badgeClass: "bg-red-100 text-red-800",
   },
+  plan_execution: {
+    label: "计划执行中",
+    description: "目标已审核通过，请在截止日前完成计划执行；到期后可进入自评",
+    badgeClass: "bg-sky-100 text-sky-800",
+  },
   self_review: {
     label: "自评中",
     description: "请完成自评",
@@ -56,7 +62,7 @@ export const PERFORMANCE_DETAIL_STATUS: Record<
     badgeClass: "bg-purple-100 text-purple-800",
   },
   dual_manager_review: {
-    label: "上级评分中",
+    label: "上级并行评分中",
     description: "直属与虚线上级并行评分，双方均提交后进入校准",
     badgeClass: "bg-purple-100 text-purple-800",
   },
@@ -67,7 +73,7 @@ export const PERFORMANCE_DETAIL_STATUS: Record<
   },
   final_review: {
     label: "待校准",
-    description: "等待管理员绩效校准；校准前直属/虚线上级仍可修改评分并提交",
+    description: "等待创建该绩效的管理员校准并下发结果",
     badgeClass: "bg-orange-100 text-orange-800",
   },
   issued: {

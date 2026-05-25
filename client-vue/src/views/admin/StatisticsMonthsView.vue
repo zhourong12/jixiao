@@ -798,10 +798,10 @@ watch([dialogOpen, periodType], ([open]) => {
     <Teleport to="body">
       <div
         v-if="awardCreateOpen"
-        class="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4"
+        class="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/40 p-2 md:items-center md:p-4"
         @click.self="closeAwardCreateDialog"
       >
-        <div class="w-full max-w-md rounded-md border border-border bg-card p-6 shadow-lg" @click.stop>
+        <div class="w-full max-w-md rounded-md border border-border bg-card p-4 shadow-lg md:p-6" @click.stop>
           <h2 class="text-lg font-semibold">新增评选录入</h2>
           <div class="mt-4 space-y-3">
             <template v-if="awardCreatePreset">
@@ -863,10 +863,10 @@ watch([dialogOpen, periodType], ([open]) => {
     <Teleport to="body">
       <div
         v-if="quarterDetailOpen"
-        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+        class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/40 p-2 md:items-center md:p-4"
         @click.self="closeQuarterDetail"
       >
-        <div class="w-full max-w-2xl rounded-md border bg-card p-6 shadow-lg" @click.stop>
+        <div class="w-full max-w-2xl rounded-md border bg-card p-4 shadow-lg md:p-6" @click.stop>
           <div class="flex items-start justify-between gap-4">
             <div>
               <h2 class="text-lg font-semibold">季度排行详情</h2>
@@ -934,8 +934,8 @@ watch([dialogOpen, periodType], ([open]) => {
       </div>
     </Teleport>
 
-    <div v-if="dialogOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="dialogOpen = false">
-      <div class="w-full max-w-md rounded-md border bg-card p-6 shadow-lg">
+    <div v-if="dialogOpen" class="ui-dialog-backdrop" @click.self="dialogOpen = false">
+      <div class="w-full max-w-md rounded-md border bg-card p-4 shadow-lg md:p-6">
         <h2 class="text-lg font-semibold">新建周期</h2>
         <p class="mt-1 text-sm text-muted-foreground">
           当前类型：<span class="font-medium text-foreground">{{ periodType === "month" ? "月度（须绑定归属季度）" : "季度" }}</span>

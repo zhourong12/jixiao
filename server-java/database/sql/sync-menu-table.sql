@@ -15,7 +15,8 @@ INSERT INTO `menu` (`menu_key`, `name`, `sort_order`) VALUES
   ('admin_roles', '角色管理', 9),
   ('admin_permissions', '权限管理', 10),
   ('admin_statistics_months', '周期与评选', 11),
-  ('admin_performance_feishu_task', '飞书绩效待办', 15),
+  ('admin_performance_feishu_task', '系统配置', 15),
+  ('admin_api_tokens', 'API Token', 16),
   ('performance_list_all', '查看全员绩效', 41),
   ('performance_batch_create', '批量创建绩效', 42),
   ('performance_review_admin', '绩效终审与校准', 43),
@@ -38,7 +39,7 @@ SELECT
   'admin',
   m.`menu_key`,
   CASE
-    WHEN m.`menu_key` IN ('todo', 'admin_permissions', 'admin_roles', 'performance_export', 'performance_batch_create', 'admin_performance_calibration') THEN 0
+    WHEN m.`menu_key` IN ('todo', 'admin_permissions', 'admin_roles', 'performance_export', 'performance_batch_create', 'admin_performance_calibration', 'admin_api_tokens') THEN 0
     ELSE 1
   END
 FROM `menu` m;
@@ -53,9 +54,9 @@ SELECT
   END
 FROM `menu` m;
 
--- 历史库纠偏：导出/批量创建/上级评分校准队列仅 super_admin（与后端 assertSuperAdmin 一致）
+-- 历史库纠偏：导出/批量创建/上级评分校准队列/API Token 仅 super_admin
 UPDATE `role_menu` SET `allowed` = 0
-WHERE `menu_key` IN ('performance_export', 'performance_batch_create', 'admin_performance_calibration')
+WHERE `menu_key` IN ('performance_export', 'performance_batch_create', 'admin_performance_calibration', 'admin_api_tokens')
   AND `role_key` <> 'super_admin';
 
 -- 路由对照（侧栏可见项；其余为能力项，无独立路由）：
@@ -68,7 +69,8 @@ WHERE `menu_key` IN ('performance_export', 'performance_batch_create', 'admin_pe
 -- admin_roles          -> /admin/roles
 -- admin_permissions    -> /admin/permissions
 -- admin_statistics_months -> /admin/statistics-months
--- admin_performance_feishu_task -> /admin/performance-feishu-task
+-- admin_performance_feishu_task -> /admin/system-config
+-- admin_api_tokens     -> /admin/api-tokens
 -- performance_list_all / performance_review_admin -> 绩效列表等页内能力
 -- admin_performance_calibration -> /admin/performance-calibration（仅 super_admin）
 

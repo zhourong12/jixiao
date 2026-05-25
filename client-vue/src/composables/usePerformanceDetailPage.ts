@@ -17,6 +17,8 @@ import {
   calibratePerformance,
   confirmPerformanceResult,
   getPerformanceDetail,
+  issueSelfReview,
+  rollbackPlanToDeadlineAnchor,
   rejectPerformance,
   saveGoalIndicators,
   savePerformanceDraft,
@@ -29,8 +31,9 @@ import {
   PERFORMANCE_DETAIL_STEPS,
   performanceDetailStepIndex,
 } from "@/constants/performanceDetailFlow";
+import { performanceStatusLabel } from "@/constants/performanceStatus";
 import { performanceDetailCopy as detailCopy } from "@/composables/performanceDetailCopy";
-import { shortPersonDisplayName } from "@/utils/user";
+import { isDisplayablePersonName, shortPersonDisplayName } from "@/utils/user";
 import { useSessionStore } from "@/stores/session";
 import { useToast } from "@/composables/useToast";
 import * as PS from "@/utils/performanceScoringMerge";
@@ -44,7 +47,7 @@ type ReviewFormRow = {
 export function usePerformanceDetailPage() {
   const route = useRoute();
   const session = useSessionStore();
-  const { userId, role } = storeToRefs(session);
+  const { userId } = storeToRefs(session);
   const toast = useToast();
 
   const rec = ref<PerformanceRecord | null>(null);
@@ -56,7 +59,32 @@ export function usePerformanceDetailPage() {
   const rejectingSubordinate = ref(false);
   const approvingGoal = ref(false);
   const calibrating = ref(false);
+  const calibrateRollbackOpen = ref(false);
+  const calibrateRollbackStage = ref<PerformanceStatus>("self_review");
+  const calibrateRollbackReason = ref("");
+  const calibrateRollbackDeadline = ref(isoDateLocal());
+  const startingSelfReview = ref(false);
+  const rollingBackPlan = ref(false);
+  const planRollbackOpen = ref(false);
+  const planRollbackDeadline = ref(isoDateLocal());
   const confirmingResult = ref(false);
+
+  function isoDateLocal(d = new Date()) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  const CALIBRATION_ROLLBACK_OPTIONS: { value: PerformanceStatus; label: string }[] = [
+    { value: "goal_setting", label: "目标设定" },
+    { value: "goal_pending_review", label: "目标审核" },
+    { value: "plan_execution", label: "计划执行中" },
+    { value: "self_review", label: "员工自评" },
+    { value: "manager_review", label: "直属上级评分" },
+    { value: "dual_manager_review", label: "上级并行评分" },
+    { value: "dotted_manager_review", label: "虚线上级评分" },
+  ];
   const templates = ref<TemplateListItem[]>([]);
   const templateLoading = ref(false);
   const selecting = ref(false);
@@ -65,10 +93,15 @@ export function usePerformanceDetailPage() {
   const goalSettings = ref<GoalSettingItem[]>([]);
   const GOAL_WEIGHT_EPS = 0.02;
   const formContent = ref<ReviewFormRow[]>([]);
+  const dottedFormContent = ref<ReviewFormRow[]>([]);
   const cultureForm = ref<CultureReviewItem[]>(
     defaultCultureDimensions().map((c) => ({ name: c.name, score: 0, comment: "" })),
   );
+  const dottedCultureForm = ref<CultureReviewItem[]>(
+    defaultCultureDimensions().map((c) => ({ name: c.name, score: 0, comment: "" })),
+  );
   const learningForm = ref<CultureReviewItem[]>([]);
+  const dottedLearningForm = ref<CultureReviewItem[]>([]);
   const personalSummary = ref("");
   const managerSummary = ref("");
   const dottedManagerSummary = ref("");
@@ -76,10 +109,12 @@ export function usePerformanceDetailPage() {
   const rejectOpen = ref(false);
   const managerRejectOpen = ref(false);
   const managerRejectReason = ref("");
-  const finalRejectOpen = ref(false);
-  const finalReturnToStage = ref<PerformanceStatus>("self_review");
-
-  const statusInfo = computed(() => (rec.value ? PERFORMANCE_DETAIL_STATUS[rec.value.status] : null));
+  const statusInfo = computed(() => {
+    if (!rec.value) return null;
+    const base = PERFORMANCE_DETAIL_STATUS[rec.value.status];
+    if (!base) return null;
+    return { ...base, label: performanceStatusLabel(rec.value.status) };
+  });
   const currentStepIndex = computed(() => (rec.value ? performanceDetailStepIndex(rec.value.status) : -1));
   const progressValue = computed(() => {
     if (currentStepIndex.value < 0) return 0;
@@ -90,18 +125,36 @@ export function usePerformanceDetailPage() {
     goalIndicatorDraft.value.reduce((s, x) => s + (Number(x.weight) || 0), 0),
   );
   const currentUserId = computed(() => userId.value || "");
-  const isSuperAdminUser = computed(() => role.value === "super_admin");
-  const canFinalCalibrationUser = computed(
-    () => session.allow("performance_review_admin") || isSuperAdminUser.value,
+  const canFinalCalibrationUser = computed(() => Boolean(rec.value?.canCalibrate));
+  const canIssueSelfReview = computed(() => Boolean(rec.value?.canIssueSelfReview));
+  const canRollbackPlanAnchor = computed(() => {
+    if (!rec.value || rec.value.status !== "plan_execution") return false;
+    return isEmployee.value || Boolean(rec.value.canCalibrate);
+  });
+  const planRollbackAnchorLabel = computed(() => {
+    const anchor = rec.value?.deadlineFlowAnchor ?? "goal_setting";
+    const hit = CALIBRATION_ROLLBACK_OPTIONS.find((o) => o.value === anchor);
+    return hit?.label ?? performanceStatusLabel(anchor as PerformanceStatus);
+  });
+  const planRollbackDeadlineFieldLabel = computed(() => {
+    const anchor = rec.value?.deadlineFlowAnchor ?? "goal_setting";
+    if (["goal_setting", "goal_rejected", "goal_pending_review"].includes(anchor)) {
+      return "目标阶段截止时间";
+    }
+    if (anchor === "self_review") return "员工自评截止时间";
+    if (["manager_review", "dual_manager_review", "dotted_manager_review"].includes(anchor)) {
+      return "上级评分截止时间";
+    }
+    if (anchor === "final_review") return "绩效校准截止时间";
+    return "节点截止时间";
+  });
+  /** 校准负责人可改分（含兼任直属/虚线上级的创建人）；非创建人的上级仍不可在校准环节改分 */
+  const canEditFinalReviewCalibration = computed(
+    () => rec.value?.status === "final_review" && canFinalCalibrationUser.value,
   );
   const isEmployee = computed(() => !!rec.value && currentUserId.value === rec.value.employeeId);
   const isManager = computed(() => !!rec.value && currentUserId.value === rec.value.managerId);
   const isDottedManager = computed(() => !!rec.value && currentUserId.value === rec.value.dottedManagerId);
-  const canEditFinalReviewManager = computed(
-    () =>
-      rec.value?.status === "final_review" &&
-      (isManager.value || (isDottedManager.value && !!rec.value.dottedManagerId)),
-  );
   const canEdit = computed(() => {
     if (!rec.value) return false;
     return (
@@ -111,7 +164,7 @@ export function usePerformanceDetailPage() {
       (rec.value.status === "manager_review" && isManager.value) ||
       (rec.value.status === "dual_manager_review" && (isManager.value || isDottedManager.value)) ||
       (rec.value.status === "dotted_manager_review" && isDottedManager.value) ||
-      canEditFinalReviewManager.value
+      canEditFinalReviewCalibration.value
     );
   });
   const canSubmit = computed(() => {
@@ -123,11 +176,11 @@ export function usePerformanceDetailPage() {
       (rec.value.status === "manager_review" && isManager.value) ||
       (rec.value.status === "dual_manager_review" && (isManager.value || isDottedManager.value)) ||
       (rec.value.status === "dotted_manager_review" && isDottedManager.value) ||
-      canEditFinalReviewManager.value
+      canEditFinalReviewCalibration.value
     );
   });
   const canGoalApprove = computed(
-    () => rec.value?.status === "goal_pending_review" && (isManager.value || isDottedManager.value),
+    () => rec.value?.status === "goal_pending_review" && isManager.value,
   );
   const canRejectSubordinateReview = computed(() => {
     if (!rec.value) return false;
@@ -149,8 +202,31 @@ export function usePerformanceDetailPage() {
     );
   });
   const showActionBar = computed(
-    () => !!rec.value && (canEdit.value || canGoalApprove.value || canFinalApprove.value),
+    () =>
+      !!rec.value &&
+      (canEdit.value ||
+        canGoalApprove.value ||
+        canFinalApprove.value ||
+        canIssueSelfReview.value ||
+        canRollbackPlanAnchor.value),
   );
+
+  const calibrateRollbackTargetLabel = computed(() => {
+    const hit = CALIBRATION_ROLLBACK_OPTIONS.find((o) => o.value === calibrateRollbackStage.value);
+    return hit?.label ?? calibrateRollbackStage.value;
+  });
+  const calibrateRollbackDeadlineFieldLabel = computed(() => {
+    const target = calibrateRollbackStage.value;
+    if (["goal_setting", "goal_rejected", "goal_pending_review"].includes(target)) {
+      return "目标阶段截止时间";
+    }
+    if (target === "self_review") return "员工自评截止时间";
+    if (["manager_review", "dual_manager_review", "dotted_manager_review"].includes(target)) {
+      return "上级评分截止时间";
+    }
+    if (target === "plan_execution") return "计划执行截止时间";
+    return "节点截止时间";
+  });
 
   function formatScore(value?: number | null) {
     if (value == null || Number.isNaN(value)) return "-";
@@ -197,6 +273,7 @@ export function usePerformanceDetailPage() {
 
     if (!performance.indicators?.length) {
       formContent.value = [];
+      dottedFormContent.value = [];
       personalSummary.value = performance.personalSummary ?? "";
       managerSummary.value = performance.managerSummary ?? "";
       dottedManagerSummary.value = performance.dottedManagerSummary ?? "";
@@ -204,8 +281,12 @@ export function usePerformanceDetailPage() {
       return;
     }
 
+    const canLoadCalibrationForm =
+      performance.status === "final_review" && performance.canCalibrate;
     let existingContent: ReviewItem[] | undefined;
-    if (currentUserId.value === performance.employeeId) {
+    if (canLoadCalibrationForm) {
+      existingContent = performance.managerReview;
+    } else if (currentUserId.value === performance.employeeId) {
       existingContent = performance.selfReview;
     } else if (currentUserId.value === performance.managerId) {
       existingContent = performance.managerReview;
@@ -230,6 +311,8 @@ export function usePerformanceDetailPage() {
     let existingCulture: CultureReviewItem[] | undefined;
     if (currentUserId.value === performance.employeeId) {
       existingCulture = performance.cultureSelfReview;
+    } else if (canLoadCalibrationForm) {
+      existingCulture = performance.cultureManagerReview;
     } else if (currentUserId.value === performance.managerId) {
       existingCulture = performance.cultureManagerReview;
     } else if (currentUserId.value === performance.dottedManagerId) {
@@ -246,7 +329,9 @@ export function usePerformanceDetailPage() {
     });
 
     let existingLearning: ReviewItem[] | undefined;
-    if (currentUserId.value === performance.employeeId) {
+    if (canLoadCalibrationForm) {
+      existingLearning = performance.learningManagerReview;
+    } else if (currentUserId.value === performance.employeeId) {
       existingLearning = performance.learningSelfReview;
     } else if (currentUserId.value === performance.managerId) {
       existingLearning = performance.learningManagerReview;
@@ -264,7 +349,46 @@ export function usePerformanceDetailPage() {
         comment: existing?.comment ?? "",
       };
     });
+
+    if (canLoadCalibrationForm && performance.dottedManagerId) {
+      dottedFormContent.value = performance.indicators.map((ind) => {
+        const existing = performance.dottedManagerReview?.find((item) => item.indicatorName === ind.name);
+        const hasScore =
+          existing != null && typeof existing.score === "number" && !Number.isNaN(existing.score);
+        return {
+          indicatorName: ind.name,
+          ...(hasScore ? { score: existing!.score } : {}),
+          comment: existing?.comment ?? "",
+        };
+      });
+      dottedCultureForm.value = dims.map((c) => {
+        const existing = performance.cultureDottedManagerReview?.find((item) => item.name === c.name);
+        return {
+          name: c.name,
+          score: existing?.score ?? 0,
+          comment: existing?.comment ?? "",
+        };
+      });
+      dottedLearningForm.value = lDims.map((ind) => {
+        const existing = performance.learningDottedManagerReview?.find(
+          (item) => item.indicatorName === ind.name || (item as ReviewItem & { name?: string }).name === ind.name,
+        );
+        return {
+          name: ind.name,
+          score: existing?.score ?? 0,
+          comment: existing?.comment ?? "",
+        };
+      });
+    } else {
+      dottedFormContent.value = [];
+      dottedCultureForm.value = dims.map((c) => ({ name: c.name, score: 0, comment: "" }));
+      dottedLearningForm.value = [];
+    }
     syncGoalIndicatorDraft(performance);
+    const anchor = performance.deadlineFlowAnchor;
+    if (anchor && CALIBRATION_ROLLBACK_OPTIONS.some((o) => o.value === anchor)) {
+      calibrateRollbackStage.value = anchor;
+    }
   }
 
   function flushGoalDraftToGoalSettings() {
@@ -430,8 +554,7 @@ export function usePerformanceDetailPage() {
       if (!Number.isFinite(n)) {
         next[index] = { ...row, score: undefined };
       } else {
-        const clamped = Math.min(cap, Math.max(0, n));
-        next[index] = { ...row, score: Math.round(clamped * 100) / 100 };
+        next[index] = { ...row, score: Math.min(cap, Math.max(0, Math.round(n))) };
       }
     }
     formContent.value = next;
@@ -448,7 +571,7 @@ export function usePerformanceDetailPage() {
       if (!Number.isFinite(n)) {
         next[index] = { ...row, score: 0 };
       } else {
-        next[index] = { ...row, score: Math.min(100, Math.max(0, Math.round(n * 100) / 100)) };
+        next[index] = { ...row, score: Math.min(100, Math.max(0, Math.round(n))) };
       }
     }
     learningForm.value = next;
@@ -491,8 +614,26 @@ export function usePerformanceDetailPage() {
         reviewType = "dotted_manager";
         content = JSON.parse(JSON.stringify(formContent.value)) as ReviewItem[];
       } else if (rec.value.status === "final_review") {
-        reviewType = currentUserId.value === rec.value.managerId ? "manager" : "dotted_manager";
+        reviewType = "manager";
         content = JSON.parse(JSON.stringify(formContent.value)) as ReviewItem[];
+        await savePerformanceDraft(rec.value.id, {
+          reviewType,
+          content,
+          cultureContent: cultureForm.value,
+          ...(learningForm.value.length > 0 ? { learningContent: learningForm.value } : {}),
+          managerSummary: managerSummary.value,
+        });
+        if (rec.value.dottedManagerId) {
+          await savePerformanceDraft(rec.value.id, {
+            reviewType: "dotted_manager",
+            content: JSON.parse(JSON.stringify(dottedFormContent.value)) as ReviewItem[],
+            cultureContent: dottedCultureForm.value,
+            ...(dottedLearningForm.value.length > 0 ? { learningContent: dottedLearningForm.value } : {}),
+            dottedManagerSummary: dottedManagerSummary.value,
+          });
+        }
+        toast.success("草稿已保存");
+        return;
       } else {
         reviewType = "self";
         content = JSON.parse(JSON.stringify(formContent.value)) as ReviewItem[];
@@ -587,20 +728,55 @@ export function usePerformanceDetailPage() {
     }
   }
 
-  async function handleSubmitReview() {
-    if (!rec.value) return;
-    const incomplete = formContent.value.filter(
+  function assertReviewFormComplete(rows: ReviewFormRow[], label: string): boolean {
+    const incomplete = rows.filter(
       (item) => item.score === undefined || item.score === null || Number.isNaN(item.score),
     );
     if (incomplete.length > 0) {
-      toast.error("请为所有指标填写评分");
-      return;
+      toast.error(`请为${label}所有指标填写评分`);
+      return false;
     }
-    const outOfRange = formContent.value.filter((item) => (item.score as number) < 0 || (item.score as number) > 100);
+    const outOfRange = rows.filter((item) => (item.score as number) < 0 || (item.score as number) > 100);
     if (outOfRange.length > 0) {
-      toast.error("评分需在 0～100 之间");
+      toast.error(`${label}评分需在 0～100 之间`);
+      return false;
+    }
+    const nonInteger = rows.filter((item) => !Number.isInteger(item.score as number));
+    if (nonInteger.length > 0) {
+      toast.error(`${label}指标评分必须为整数`);
+      return false;
+    }
+    return true;
+  }
+
+  function assertDimensionScoresInteger(rows: CultureReviewItem[], label: string): boolean {
+    const nonInteger = rows.filter(
+      (item) => typeof item.score === "number" && !Number.isNaN(item.score) && !Number.isInteger(item.score),
+    );
+    if (nonInteger.length > 0) {
+      toast.error(`${label}评分必须为整数`);
+      return false;
+    }
+    return true;
+  }
+
+  async function handleSubmitReview() {
+    if (!rec.value) return;
+    const isFinalCalibration =
+      rec.value.status === "final_review" && canEditFinalReviewCalibration.value && !!rec.value.dottedManagerId;
+    if (!assertReviewFormComplete(formContent.value, isFinalCalibration ? "直属上级" : "")) return;
+    if (isFinalCalibration && !assertReviewFormComplete(dottedFormContent.value, "虚线上级")) return;
+    if (!assertDimensionScoresInteger(cultureForm.value, "文化价值观")) return;
+    if (learningForm.value.length > 0 && !assertDimensionScoresInteger(learningForm.value, "学习与成长")) return;
+    if (isFinalCalibration) {
+      if (!assertDimensionScoresInteger(dottedCultureForm.value, "虚线上级文化价值观")) return;
+      if (dottedLearningForm.value.length > 0 && !assertDimensionScoresInteger(dottedLearningForm.value, "虚线上级学习与成长")) return;
+    }
+    if (rec.value.status === "self_review" && !personalSummary.value.trim()) {
+      toast.error("请填写评分详情");
       return;
     }
+
     const reviewType: "self" | "manager" | "dotted_manager" =
       rec.value.status === "self_review"
         ? "self"
@@ -613,9 +789,7 @@ export function usePerformanceDetailPage() {
             : rec.value.status === "dotted_manager_review"
               ? "dotted_manager"
               : rec.value.status === "final_review"
-                ? currentUserId.value === rec.value.managerId
-                  ? "manager"
-                  : "dotted_manager"
+                ? "manager"
                 : "dotted_manager";
     submittingReview.value = true;
     try {
@@ -633,6 +807,20 @@ export function usePerformanceDetailPage() {
         ...(reviewType === "manager" ? { managerSummary: managerSummary.value } : {}),
         ...(reviewType === "dotted_manager" ? { dottedManagerSummary: dottedManagerSummary.value } : {}),
       });
+      if (isFinalCalibration) {
+        const dottedContent: ReviewItem[] = dottedFormContent.value.map((c) => ({
+          indicatorName: c.indicatorName,
+          score: c.score!,
+          comment: c.comment ?? "",
+        }));
+        await submitPerformanceReview(rec.value.id, {
+          reviewType: "dotted_manager",
+          content: dottedContent,
+          cultureContent: dottedCultureForm.value,
+          ...(dottedLearningForm.value.length > 0 ? { learningContent: dottedLearningForm.value } : {}),
+          dottedManagerSummary: dottedManagerSummary.value,
+        });
+      }
       toast.success("提交成功");
       rec.value = await getPerformanceDetail(rec.value.id);
       syncFormsFromRecord(rec.value);
@@ -674,28 +862,90 @@ export function usePerformanceDetailPage() {
     }
   }
 
-  async function handleCalibrate(approved: boolean) {
+  async function handleCalibrate() {
     if (!rec.value) return;
-    if (!approved && !rejectReason.value.trim()) {
-      toast.error("请输入驳回原因");
+    calibrating.value = true;
+    try {
+      await calibratePerformance(rec.value.id, { approved: true });
+      toast.success("校准通过，结果已下发");
+      rec.value = await getPerformanceDetail(rec.value.id);
+      syncFormsFromRecord(rec.value);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "校准通过失败");
+    } finally {
+      calibrating.value = false;
+    }
+  }
+
+  function openCalibrateRollbackDialog() {
+    calibrateRollbackDeadline.value = isoDateLocal();
+    calibrateRollbackOpen.value = true;
+  }
+
+  async function handleCalibrateRollbackConfirm() {
+    if (!rec.value) return;
+    const deadline = calibrateRollbackDeadline.value.trim();
+    if (!deadline) {
+      toast.error("请选择截止时间");
       return;
     }
     calibrating.value = true;
     try {
       await calibratePerformance(rec.value.id, {
-        approved,
-        rejectionReason: approved ? undefined : rejectReason.value.trim(),
-        returnToStage: approved ? undefined : finalReturnToStage.value,
+        approved: false,
+        returnToStage: calibrateRollbackStage.value,
+        rejectionReason: calibrateRollbackReason.value.trim() || "校准回退",
+        deadline,
       });
-      toast.success(approved ? "校准通过，结果已下发" : "已驳回");
-      finalRejectOpen.value = false;
-      rejectReason.value = "";
+      toast.success(`已回退至「${calibrateRollbackTargetLabel.value}」`);
+      calibrateRollbackOpen.value = false;
       rec.value = await getPerformanceDetail(rec.value.id);
       syncFormsFromRecord(rec.value);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : approved ? "校准通过失败" : "驳回失败");
+      toast.error(e instanceof Error ? e.message : "回退失败");
     } finally {
       calibrating.value = false;
+    }
+  }
+
+  async function handleIssueSelfReview() {
+    if (!rec.value) return;
+    startingSelfReview.value = true;
+    try {
+      await issueSelfReview(rec.value.id);
+      toast.success("已下发员工自评");
+      rec.value = await getPerformanceDetail(rec.value.id);
+      syncFormsFromRecord(rec.value);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "下发失败");
+    } finally {
+      startingSelfReview.value = false;
+    }
+  }
+
+  function openPlanRollbackDialog() {
+    planRollbackDeadline.value = isoDateLocal();
+    planRollbackOpen.value = true;
+  }
+
+  async function handleRollbackPlanAnchorConfirm() {
+    if (!rec.value) return;
+    const deadline = planRollbackDeadline.value.trim();
+    if (!deadline) {
+      toast.error("请选择截止时间");
+      return;
+    }
+    rollingBackPlan.value = true;
+    try {
+      await rollbackPlanToDeadlineAnchor(rec.value.id, { deadline });
+      toast.success(`已回退至「${planRollbackAnchorLabel.value}」`);
+      planRollbackOpen.value = false;
+      rec.value = await getPerformanceDetail(rec.value.id);
+      syncFormsFromRecord(rec.value);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "回退失败");
+    } finally {
+      rollingBackPlan.value = false;
     }
   }
 
@@ -722,19 +972,18 @@ export function usePerformanceDetailPage() {
       return isManager.value ? "\u76f4\u5c5e\u4e0a\u7ea7\u8bc4\u5206" : "\u865a\u7ebf\u4e0a\u7ea7\u8bc4\u5206";
     }
     if (rec.value.status === "dotted_manager_review") return "\u865a\u7ebf\u4e0a\u7ea7\u8bc4\u5206";
-    if (rec.value.status === "final_review") {
-      return isManager.value
-        ? "\u76f4\u5c5e\u4e0a\u7ea7\u8bc4\u5206\uff08\u6821\u51c6\u524d\u53ef\u4fee\u6539\uff09"
-        : "\u865a\u7ebf\u4e0a\u7ea7\u8bc4\u5206\uff08\u6821\u51c6\u524d\u53ef\u4fee\u6539\uff09";
+    if (rec.value.status === "final_review" && canEditFinalReviewCalibration.value) {
+      return "\u7ee9\u6548\u6821\u51c6\u8bc4\u5206";
     }
     return "\u8bc4\u5206";
   }
 
-  function personLabel(id?: string, name?: string) {
+  function personLabel(id?: string, name?: string, emptyOpenIdFallback = "管理员") {
+    const idTrim = (id || "").trim();
     const label = shortPersonDisplayName((name || "").trim());
-    if (label) return label;
-    const fallback = (id || "").trim();
-    return fallback || "-";
+    if (isDisplayablePersonName(label, idTrim)) return label;
+    if (/^ou_|^on_/i.test(idTrim)) return emptyOpenIdFallback;
+    return idTrim || "-";
   }
 
   function stepResponsibleLabel(stepKey: string) {
@@ -745,31 +994,46 @@ export function usePerformanceDetailPage() {
       case "self":
       case "confirm":
         return personLabel(rec.value.employeeId, rec.value.employeeName);
-      case "goal_review": {
-        const direct = personLabel(rec.value.managerId, rec.value.managerName);
-        if (!rec.value.dottedManagerId) return direct;
-        const dotted = personLabel(rec.value.dottedManagerId, rec.value.dottedManagerName);
-        return `${direct} / ${dotted}`;
-      }
+      case "goal_review":
+        return personLabel(rec.value.managerId, rec.value.managerName);
+      case "plan":
+        return personLabel(rec.value.employeeId, rec.value.employeeName);
       case "manager": {
         const direct = personLabel(rec.value.managerId, rec.value.managerName);
-        if (!rec.value.dottedManagerId) return direct;
+        const dotId = (rec.value.dottedManagerId || "").trim();
+        if (!dotId || dotId === (rec.value.managerId || "").trim()) return direct;
         const dotted = personLabel(rec.value.dottedManagerId, rec.value.dottedManagerName);
+        if (dotted === direct) return direct;
         return `${direct} / ${dotted}`;
       }
-      case "final": {
-        const list = rec.value.calibrationAssignees;
-        if (list?.length) {
-          const parts = list
-            .map((x) => personLabel(x.employeeId, x.name))
-            .filter((s) => s && s !== "-");
-          if (parts.length) return parts.join("\u3001");
+      case "final":
+        if (rec.value.calibrationOwnerId) {
+          return personLabel(
+            rec.value.calibrationOwnerId,
+            rec.value.calibrationOwnerName,
+            "创建人",
+          );
         }
-        return "\u7ba1\u7406\u5458";
-      }
+        return "创建人";
       default:
         return "-";
     }
+  }
+
+  function stepDeadlineLabel(stepKey: string): string | null {
+    if (stepKey === "plan") return null;
+    const d = rec.value?.nodeDeadlines;
+    if (!d) return null;
+    const map: Record<string, string | undefined> = {
+      goal: d.goal,
+      goal_review: d.goal,
+      self: d.scoring,
+      manager: d.scoring,
+      final: d.final,
+      confirm: d.confirm,
+    };
+    const v = map[stepKey];
+    return v?.trim() ? v : null;
   }
 
   function hasCompletePersistedReview(performance: PerformanceRecord, role: "self" | "manager" | "dotted_manager") {
@@ -800,9 +1064,7 @@ export function usePerformanceDetailPage() {
     }
     if (r.status === "dotted_manager_review" && isDottedManager.value) return "dotted_manager";
     if (r.status === "final_review") {
-      if (isManager.value) return "manager";
-      if (isDottedManager.value && r.dottedManagerId) return "dotted_manager";
-      return null;
+      return canEditFinalReviewCalibration.value ? "manager" : null;
     }
     return null;
   });
@@ -813,10 +1075,13 @@ export function usePerformanceDetailPage() {
     const role = activeReviewRoleForSubmit.value;
     if (!role) return detailCopy.submit;
     const submitted = hasCompletePersistedReview(r, role);
+    if (r.status === "final_review") {
+      return submitted ? detailCopy.submitCalibrationUpdate : detailCopy.submitReviewFirst;
+    }
     if (role === "self") {
       return submitted ? detailCopy.submitReviewUpdate : detailCopy.submitSelfFirst;
     }
-    return submitted ? detailCopy.submitReviewUpdate : detailCopy.submitReviewFirst;
+    return submitted ? detailCopy.submitSupervisorUpdate : detailCopy.submitReviewFirst;
   });
 
   function reviewLine(list: ReviewItem[] | undefined, indicatorName: string) {
@@ -833,12 +1098,19 @@ export function usePerformanceDetailPage() {
     return PS.calcWeightedScore(perf ?? null, inds);
   }
 
-  /** 仅绩效指标按模板权重折算到百分制中的「绩效部分」，不含文化价值观加和 */
+  /** 绩效目标模板内加权平均，再乘评分方案「绩效」占比（与学习与成长总分行一致） */
+  function applyPerformanceSchemeWeight(internalRate: number | null): number | null {
+    const sw = scoringWeights.value;
+    if (sw != null && sw.performance > 0) {
+      return PS.applySchemeWeightPortion(internalRate, sw.performance);
+    }
+    return internalRate;
+  }
+
   function weightedPerfOnlyFromReviews(perf: ReviewItem[] | undefined, inds: PerformanceIndicator[] | undefined): number | null {
     if (!inds?.length) return null;
     const rate = perfScoreRate(perf, inds);
-    if (rate === null) return null;
-    return PS.round2(rate);
+    return applyPerformanceSchemeWeight(rate);
   }
 
   function singleReviewerTotal(
@@ -902,6 +1174,55 @@ export function usePerformanceDetailPage() {
     return weightedPerfOnlyFromReviews(asReview, inds);
   });
 
+  const previewDottedEditingPerfOnlyTotal = computed(() => {
+    const inds = rec.value?.indicators;
+    if (!inds?.length || dottedFormContent.value.length < inds.length) return null;
+    const asReview: ReviewItem[] = dottedFormContent.value.map((fc) => ({
+      indicatorName: fc.indicatorName,
+      score: fc.score as number,
+      comment: fc.comment,
+    }));
+    return weightedPerfOnlyFromReviews(asReview, inds);
+  });
+
+  const previewManagerEditingTotal = computed(() => {
+    const inds = rec.value?.indicators;
+    if (!inds?.length) return null;
+    const asReview: ReviewItem[] = formContent.value.map((fc) => ({
+      indicatorName: fc.indicatorName,
+      score: fc.score as number,
+      comment: fc.comment,
+    }));
+    const lReview: ReviewItem[] = learningForm.value.map((lf) => ({
+      indicatorName: lf.name,
+      score: lf.score as number,
+      comment: lf.comment ?? "",
+    }));
+    return singleReviewerTotal(
+      asReview, inds, cultureForm.value,
+      lReview, learningDimensions.value, scoringWeights.value, cultureDimensions.value,
+    );
+  });
+
+  const previewDottedEditingTotal = computed(() => {
+    const inds = rec.value?.indicators;
+    if (!inds?.length) return null;
+    const asReview: ReviewItem[] = dottedFormContent.value.map((fc) => ({
+      indicatorName: fc.indicatorName,
+      score: fc.score as number,
+      comment: fc.comment,
+    }));
+    const lReview: ReviewItem[] = dottedLearningForm.value.map((lf) => ({
+      indicatorName: lf.name,
+      score: lf.score as number,
+      comment: lf.comment ?? "",
+    }));
+    return singleReviewerTotal(
+      asReview, inds, dottedCultureForm.value,
+      lReview, learningDimensions.value, scoringWeights.value, cultureDimensions.value,
+    );
+  });
+
   const previewEditingTotal = computed(() => {
     const inds = rec.value?.indicators;
     if (!inds?.length) return null;
@@ -951,20 +1272,21 @@ export function usePerformanceDetailPage() {
   });
 
   const matrixEditSelf = computed(() => rec.value?.status === "self_review" && isEmployee.value && canEdit.value);
-  const matrixEditManager = computed(
-    () =>
-      !!rec.value &&
-      canEdit.value &&
-      isManager.value &&
-      ["manager_review", "dual_manager_review", "final_review"].includes(rec.value.status),
-  );
-  const matrixEditDotted = computed(
-    () =>
-      !!rec.value &&
-      canEdit.value &&
+  const matrixEditManager = computed(() => {
+    if (!rec.value || !canEdit.value) return false;
+    if (rec.value.status === "final_review") return canEditFinalReviewCalibration.value;
+    return isManager.value && ["manager_review", "dual_manager_review"].includes(rec.value.status);
+  });
+  const matrixEditDotted = computed(() => {
+    if (!rec.value || !canEdit.value || !rec.value.dottedManagerId) return false;
+    if (rec.value.status === "final_review") return canEditFinalReviewCalibration.value;
+    return (
       isDottedManager.value &&
-      !!rec.value.dottedManagerId &&
-      ["dual_manager_review", "dotted_manager_review", "final_review"].includes(rec.value.status),
+      ["dual_manager_review", "dotted_manager_review"].includes(rec.value.status)
+    );
+  });
+  const dualSupervisorCalibrationEdit = computed(
+    () => matrixEditManager.value && matrixEditDotted.value && !!rec.value?.dottedManagerId,
   );
 
   const liveMergeWeights = computed(() =>
@@ -990,7 +1312,8 @@ export function usePerformanceDetailPage() {
     const ind = r.indicators?.[index];
     if (!ind || !r.dottedManagerId) return null;
     if (matrixEditDotted.value) {
-      const row = formContent.value[index];
+      const rows = dualSupervisorCalibrationEdit.value ? dottedFormContent.value : formContent.value;
+      const row = rows[index];
       if (!row || row.indicatorName !== ind.name) return null;
       const s = row.score;
       if (s === undefined || s === null || Number.isNaN(s)) return null;
@@ -1015,7 +1338,8 @@ export function usePerformanceDetailPage() {
   function dottedCultureScoreAt(r: PerformanceRecord, dimensionName: string): number | null {
     if (!r.dottedManagerId) return null;
     if (matrixEditDotted.value) {
-      const row = cultureForm.value.find((x) => x.name === dimensionName);
+      const list = dualSupervisorCalibrationEdit.value ? dottedCultureForm.value : cultureForm.value;
+      const row = list.find((x) => x.name === dimensionName);
       if (!row || typeof row.score !== "number" || Number.isNaN(row.score)) return null;
       return row.score;
     }
@@ -1040,7 +1364,8 @@ export function usePerformanceDetailPage() {
   function dottedLearningScoreAt(r: PerformanceRecord, dimName: string): number | null {
     if (!r.dottedManagerId) return null;
     if (matrixEditDotted.value) {
-      const row = learningForm.value.find((x) => x.name === dimName);
+      const list = dualSupervisorCalibrationEdit.value ? dottedLearningForm.value : learningForm.value;
+      const row = list.find((x) => x.name === dimName);
       if (!row || typeof row.score !== "number" || Number.isNaN(row.score)) return null;
       return row.score;
     }
@@ -1118,7 +1443,8 @@ export function usePerformanceDetailPage() {
     const r = rec.value;
     if (!r?.indicators?.length || !r.dottedManagerId) return null;
     if (matrixEditDotted.value) {
-      return PS.reviewItemsFromForm(r.indicators, formContent.value);
+      const rows = dualSupervisorCalibrationEdit.value ? dottedFormContent.value : formContent.value;
+      return PS.reviewItemsFromForm(r.indicators, rows);
     }
     if (PS.isReviewCompleteForIndicators(r.dottedManagerReview, r.indicators)) {
       return r.dottedManagerReview ?? null;
@@ -1145,7 +1471,8 @@ export function usePerformanceDetailPage() {
     const lInds = learningDimensions.value;
     if (!lInds.length || !r?.dottedManagerId) return null;
     if (matrixEditDotted.value) {
-      return learningForm.value.map((lf) => ({
+      const list = dualSupervisorCalibrationEdit.value ? dottedLearningForm.value : learningForm.value;
+      return list.map((lf) => ({
         indicatorName: lf.name,
         score: lf.score as number,
         comment: lf.comment ?? "",
@@ -1154,12 +1481,63 @@ export function usePerformanceDetailPage() {
     return r?.learningDottedManagerReview ?? null;
   });
 
+  /** 详情页与评分矩阵「最终得分」共用：校准可编辑时用实时合成，否则用服务端合成总分 */
+  const displayMergedTotalScore = computed((): number | null | undefined => {
+    const r = rec.value;
+    if (!r) return undefined;
+    const preview = previewReviewMergedTotal.value;
+    const editingSupervisor = matrixEditManager.value || matrixEditDotted.value;
+    const editingCalibration =
+      r.status === "final_review" &&
+      canEditFinalReviewCalibration.value &&
+      editingSupervisor;
+
+    // 双上级并行评分：totalScore 可能只是先提交一方的单人暂计分，不能当作合成结果
+    if (r.status === "dual_manager_review") {
+      if (preview != null && !Number.isNaN(preview)) return preview;
+      return undefined;
+    }
+
+    if (editingSupervisor) {
+      if (preview != null && !Number.isNaN(preview)) return preview;
+      return undefined;
+    }
+
+    if (["final_review", "issued", "completed"].includes(r.status)) {
+      if (editingCalibration && preview != null && !Number.isNaN(preview)) {
+        return preview;
+      }
+      if (r.reviewMergedTotal != null && !Number.isNaN(r.reviewMergedTotal)) {
+        return r.reviewMergedTotal;
+      }
+      if (preview != null && !Number.isNaN(preview)) {
+        return preview;
+      }
+      if (r.totalScore != null && !Number.isNaN(r.totalScore)) {
+        return r.totalScore;
+      }
+      return undefined;
+    }
+
+    if (preview != null && !Number.isNaN(preview)) return preview;
+    return r.totalScore;
+  });
+
+  const displayDetailTotalScore = computed((): number | undefined => {
+    const v = displayMergedTotalScore.value;
+    return v == null || Number.isNaN(v) ? undefined : v;
+  });
+
   const previewReviewMergedTotal = computed((): number | null => {
     const r = rec.value;
     if (!r?.indicators?.length) return null;
     const mgrEff = effectiveManagerPerfForMerge.value;
     const cultureMgr = matrixEditManager.value ? cultureForm.value : r.cultureManagerReview;
-    const cultureDot = matrixEditDotted.value ? cultureForm.value : r.cultureDottedManagerReview;
+    const cultureDot = matrixEditDotted.value
+      ? dualSupervisorCalibrationEdit.value
+        ? dottedCultureForm.value
+        : cultureForm.value
+      : r.cultureDottedManagerReview;
     const [mw, dw] = liveMergeWeights.value;
     const sw = scoringWeights.value;
     const lInds = learningDimensions.value;
@@ -1181,20 +1559,29 @@ export function usePerformanceDetailPage() {
     if (!r?.indicators?.length) return null;
     const mgrEff = effectiveManagerPerfForMerge.value;
     const [mw, dw] = liveMergeWeights.value;
+    let raw: number | null;
     if (!r.dottedManagerId) {
-      return PS.computeMergedPerfOnlyTotal(r.indicators, mgrEff, undefined, false, mw, dw);
+      raw = PS.computeMergedPerfOnlyTotal(r.indicators, mgrEff, undefined, false, mw, dw);
+    } else {
+      const dotEff = effectiveDottedPerfForMerge.value;
+      if (dotEff == null) {
+        return null;
+      }
+      raw = PS.computeMergedPerfOnlyTotal(r.indicators, mgrEff, dotEff, true, mw, dw);
     }
-    const dotEff = effectiveDottedPerfForMerge.value;
-    if (dotEff == null) {
-      return null;
-    }
-    return PS.computeMergedPerfOnlyTotal(r.indicators, mgrEff, dotEff, true, mw, dw);
+    return applyPerformanceSchemeWeight(raw);
   });
 
   const matrixTemplateTotals = computed(() => ({
     self: matrixEditSelf.value ? previewEditingPerfOnlyTotal.value : readonlyPerfOnlyTotals.value.self,
-    manager: matrixEditManager.value ? previewEditingPerfOnlyTotal.value : readonlyPerfOnlyTotals.value.manager,
-    dotted: matrixEditDotted.value ? previewEditingPerfOnlyTotal.value : readonlyPerfOnlyTotals.value.dotted,
+    manager: matrixEditManager.value
+      ? previewEditingPerfOnlyTotal.value
+      : readonlyPerfOnlyTotals.value.manager,
+    dotted: matrixEditDotted.value
+      ? dualSupervisorCalibrationEdit.value
+        ? previewDottedEditingPerfOnlyTotal.value
+        : previewEditingPerfOnlyTotal.value
+      : readonlyPerfOnlyTotals.value.dotted,
   }));
 
   return {
@@ -1208,6 +1595,22 @@ export function usePerformanceDetailPage() {
     rejectingSubordinate,
     approvingGoal,
     calibrating,
+    calibrateRollbackOpen,
+    calibrateRollbackStage,
+    calibrateRollbackReason,
+    calibrateRollbackDeadline,
+    calibrateRollbackDeadlineFieldLabel,
+    CALIBRATION_ROLLBACK_OPTIONS,
+    calibrateRollbackTargetLabel,
+    openCalibrateRollbackDialog,
+    startingSelfReview,
+    canIssueSelfReview,
+    canRollbackPlanAnchor,
+    planRollbackAnchorLabel,
+    planRollbackDeadlineFieldLabel,
+    planRollbackOpen,
+    planRollbackDeadline,
+    rollingBackPlan,
     confirmingResult,
     templates,
     templateLoading,
@@ -1216,8 +1619,12 @@ export function usePerformanceDetailPage() {
     goalIndicatorDraft,
     goalSettings,
     formContent,
+    dottedFormContent,
     cultureForm,
+    dottedCultureForm,
     learningForm,
+    dottedLearningForm,
+    dualSupervisorCalibrationEdit,
     personalSummary,
     managerSummary,
     dottedManagerSummary,
@@ -1226,8 +1633,6 @@ export function usePerformanceDetailPage() {
     managerRejectOpen,
     managerRejectReason,
     canRejectSubordinateReview,
-    finalRejectOpen,
-    finalReturnToStage,
     statusInfo,
     currentStepIndex,
     progressValue,
@@ -1262,7 +1667,12 @@ export function usePerformanceDetailPage() {
     removeGoalIndicatorRow,
     startCustomGoalIndicators,
     handleCalibrate,
+    handleCalibrateRollbackConfirm,
+    handleIssueSelfReview,
+    openPlanRollbackDialog,
+    handleRollbackPlanAnchorConfirm,
     handleConfirmResult,
+    stepDeadlineLabel,
     reviewFormTitle,
     stepResponsibleLabel,
     personLabel,
@@ -1272,6 +1682,8 @@ export function usePerformanceDetailPage() {
     reviewLine,
     cultureLine,
     previewEditingTotal,
+    previewManagerEditingTotal,
+    previewDottedEditingTotal,
     readonlyReviewTotals,
     matrixEditSelf,
     matrixEditManager,
@@ -1284,7 +1696,9 @@ export function usePerformanceDetailPage() {
     learningDimensions,
     scoringWeights,
     previewReviewMergedTotal,
+    displayMergedTotalScore,
     previewReviewMergedPerfOnlyTotal,
+    displayDetailTotalScore,
     matrixTemplateTotals,
   };
 }

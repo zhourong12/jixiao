@@ -10,7 +10,6 @@ public class Jixiao2Properties {
 
   private final Cors cors = new Cors();
   private final Session session = new Session();
-  private final Auth auth = new Auth();
   private final Feishu feishu = new Feishu();
 
   public Cors getCors() {
@@ -19,10 +18,6 @@ public class Jixiao2Properties {
 
   public Session getSession() {
     return session;
-  }
-
-  public Auth getAuth() {
-    return auth;
   }
 
   public Feishu getFeishu() {
@@ -117,19 +112,6 @@ public class Jixiao2Properties {
         return productionProfile;
       }
       return Boolean.parseBoolean(secure);
-    }
-  }
-
-  public static class Auth {
-    /** 是否允许账密登录；false 时仅飞书 OAuth */
-    private boolean passwordLoginEnabled = true;
-
-    public boolean isPasswordLoginEnabled() {
-      return passwordLoginEnabled;
-    }
-
-    public void setPasswordLoginEnabled(boolean passwordLoginEnabled) {
-      this.passwordLoginEnabled = passwordLoginEnabled;
     }
   }
 

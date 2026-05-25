@@ -27,7 +27,12 @@ public class FeishuTaskService {
   private static final Logger log = LoggerFactory.getLogger(FeishuTaskService.class);
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
+  private final FeishuImService feishuIm;
   private final RestTemplate restTemplate = feishuTaskRestTemplate();
+
+  public FeishuTaskService(FeishuImService feishuIm) {
+    this.feishuIm = feishuIm;
+  }
 
   private static RestTemplate feishuTaskRestTemplate() {
     HttpComponentsClientHttpRequestFactory f = new HttpComponentsClientHttpRequestFactory();
@@ -46,11 +51,96 @@ public class FeishuTaskService {
       String description,
       String assigneeOpenId,
       long dueEpochMs) {
-    if (tenantToken == null || tenantToken.trim().isEmpty()) {
+    TaskApiResult r = createTaskResult(tenantToken, summary, description, assigneeOpenId, dueEpochMs);
+    return r.guid;
+  }
+
+  /** token 失效时刷新 tenant_access_token 并重试一次。 */
+  public String createTaskWithRetry(
+      String appId,
+      String appSecret,
+      String summary,
+      String description,
+      String assigneeOpenId,
+      long dueEpochMs) {
+    if (appId == null
+        || appId.trim().isEmpty()
+        || appSecret == null
+        || appSecret.trim().isEmpty()) {
       return null;
     }
+    String token = feishuIm.fetchTenantAccessToken(appId, appSecret);
+    TaskApiResult r = createTaskResult(token, summary, description, assigneeOpenId, dueEpochMs);
+    if (r.success() || !FeishuImService.isTokenRelatedFailure(r.feishuCode, r.errorMsg)) {
+      return r.guid;
+    }
+    log.info("飞书创建待办 token 失效，刷新后重试 appId={} feishu_code={}", appId, r.feishuCode);
+    feishuIm.invalidateTenantAccessToken(appId);
+    token = feishuIm.fetchTenantAccessToken(appId, appSecret);
+    r = createTaskResult(token, summary, description, assigneeOpenId, dueEpochMs);
+    return r.guid;
+  }
+
+  public boolean completeTask(String tenantToken, String taskGuid) {
+    return completeTaskResult(tenantToken, taskGuid).success();
+  }
+
+  /** token 失效时刷新 tenant_access_token 并重试一次。 */
+  public boolean completeTaskWithRetry(String appId, String appSecret, String taskGuid) {
+    if (appId == null
+        || appId.trim().isEmpty()
+        || appSecret == null
+        || appSecret.trim().isEmpty()
+        || taskGuid == null
+        || taskGuid.trim().isEmpty()) {
+      return false;
+    }
+    String token = feishuIm.fetchTenantAccessToken(appId, appSecret);
+    TaskApiResult r = completeTaskResult(token, taskGuid);
+    if (r.success() || !FeishuImService.isTokenRelatedFailure(r.feishuCode, r.errorMsg)) {
+      return r.success();
+    }
+    log.info("飞书完成待办 token 失效，刷新后重试 appId={} feishu_code={}", appId, r.feishuCode);
+    feishuIm.invalidateTenantAccessToken(appId);
+    token = feishuIm.fetchTenantAccessToken(appId, appSecret);
+    return completeTaskResult(token, taskGuid).success();
+  }
+
+  private static final class TaskApiResult {
+    private final int feishuCode;
+    private final String errorMsg;
+    private final String guid;
+
+    private TaskApiResult(int feishuCode, String errorMsg, String guid) {
+      this.feishuCode = feishuCode;
+      this.errorMsg = errorMsg;
+      this.guid = guid;
+    }
+
+    private static TaskApiResult ok(String guid) {
+      return new TaskApiResult(0, null, guid);
+    }
+
+    private static TaskApiResult fail(int feishuCode, String errorMsg) {
+      return new TaskApiResult(feishuCode, errorMsg, null);
+    }
+
+    private boolean success() {
+      return feishuCode == 0;
+    }
+  }
+
+  private TaskApiResult createTaskResult(
+      String tenantToken,
+      String summary,
+      String description,
+      String assigneeOpenId,
+      long dueEpochMs) {
+    if (tenantToken == null || tenantToken.trim().isEmpty()) {
+      return TaskApiResult.fail(-1, "token 为空");
+    }
     if (assigneeOpenId == null || assigneeOpenId.trim().isEmpty()) {
-      return null;
+      return TaskApiResult.fail(-1, "assignee 为空");
     }
     try {
       Map<String, Object> due = new LinkedHashMap<String, Object>();
@@ -75,24 +165,23 @@ public class FeishuTaskService {
       HttpEntity<String> entity = new HttpEntity<String>(payload, headers);
       ResponseEntity<String> res = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
       JsonNode node = MAPPER.readTree(res.getBody());
-      if (node.path("code").asInt(-1) != 0) {
-        log.warn(
-            "飞书创建任务失败 code={} msg={}",
-            node.path("code").asInt(),
-            node.path("msg").asText(""));
-        return null;
+      int code = node.path("code").asInt(-1);
+      if (code != 0) {
+        String msg = node.path("msg").asText("");
+        log.warn("飞书创建任务失败 code={} msg={}", code, msg);
+        return TaskApiResult.fail(code, msg);
       }
       String guid = node.path("data").path("task").path("guid").asText("").trim();
-      return guid.isEmpty() ? null : guid;
+      return guid.isEmpty() ? TaskApiResult.fail(-1, "guid 为空") : TaskApiResult.ok(guid);
     } catch (Exception e) {
       log.warn("飞书创建任务异常", e);
-      return null;
+      return TaskApiResult.fail(-1, e.getMessage() == null ? "异常" : e.getMessage());
     }
   }
 
-  public boolean completeTask(String tenantToken, String taskGuid) {
+  private TaskApiResult completeTaskResult(String tenantToken, String taskGuid) {
     if (tenantToken == null || tenantToken.trim().isEmpty() || taskGuid == null || taskGuid.trim().isEmpty()) {
-      return false;
+      return TaskApiResult.fail(-1, "参数为空");
     }
     try {
       Map<String, Object> task = new LinkedHashMap<String, Object>();
@@ -111,18 +200,16 @@ public class FeishuTaskService {
       HttpEntity<String> entity = new HttpEntity<String>(payload, headers);
       ResponseEntity<String> res = restTemplate.exchange(url, HttpMethod.PATCH, entity, String.class);
       JsonNode node = MAPPER.readTree(res.getBody());
-      if (node.path("code").asInt(-1) != 0) {
-        log.warn(
-            "飞书完成任务失败 guid={} code={} msg={}",
-            taskGuid,
-            node.path("code").asInt(),
-            node.path("msg").asText(""));
-        return false;
+      int code = node.path("code").asInt(-1);
+      if (code != 0) {
+        String msg = node.path("msg").asText("");
+        log.warn("飞书完成任务失败 guid={} code={} msg={}", taskGuid, code, msg);
+        return TaskApiResult.fail(code, msg);
       }
-      return true;
+      return TaskApiResult.ok(null);
     } catch (Exception e) {
       log.warn("飞书完成任务异常 guid={}", taskGuid, e);
-      return false;
+      return TaskApiResult.fail(-1, e.getMessage() == null ? "异常" : e.getMessage());
     }
   }
 }

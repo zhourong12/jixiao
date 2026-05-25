@@ -38,15 +38,47 @@ const monthsInYear = computed(() => {
   return out.sort((a, b) => a.periodKey.localeCompare(b.periodKey));
 });
 
+function currentPeriodKey(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
 function ensureYearInList() {
   if (selectedYear.value && years.value.includes(selectedYear.value)) return;
+  const curY = String(new Date().getFullYear());
+  if (years.value.includes(curY)) {
+    selectedYear.value = curY;
+    return;
+  }
   selectedYear.value = years.value[0] ?? "";
 }
 
 function ensureMonthInYear() {
   const months = monthsInYear.value;
   if (selectedMonthKey.value && months.some((it) => it.periodKey === selectedMonthKey.value)) return;
-  selectedMonthKey.value = "";
+  const curPk = currentPeriodKey();
+  const cur = months.find((it) => it.periodKey === curPk);
+  selectedMonthKey.value = cur ? curPk : months.length ? months[months.length - 1]!.periodKey : "";
+}
+
+/** 未选考核月度时默认当前月（须在周期配置中存在） */
+function applyDefaultSelection() {
+  const trimmed = model.value.trim();
+  if (trimmed && props.items.some((i) => i.periodKey === trimmed)) return;
+
+  const curPk = currentPeriodKey();
+  if (props.items.some((i) => i.periodKey === curPk)) {
+    selectedYear.value = curPk.slice(0, 4);
+    selectedMonthKey.value = curPk;
+    model.value = curPk;
+    return;
+  }
+
+  ensureYearInList();
+  ensureMonthInYear();
+  emitModelFromMonth();
 }
 
 function emitModelFromMonth() {
@@ -64,8 +96,7 @@ watch(
     const trimmed = v.trim();
     const m = /^(\d{4})-(\d{2})$/.exec(trimmed);
     if (!m || !props.items.some((i) => i.periodKey === trimmed)) {
-      ensureYearInList();
-      ensureMonthInYear();
+      applyDefaultSelection();
       return;
     }
     selectedYear.value = m[1];
@@ -86,8 +117,7 @@ watch(
         selectedMonthKey.value = trimmed;
       }
     } else {
-      ensureYearInList();
-      ensureMonthInYear();
+      applyDefaultSelection();
     }
   },
   { deep: true },

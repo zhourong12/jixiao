@@ -21,6 +21,22 @@ const {
   rejectingSubordinate,
   approvingGoal,
   calibrating,
+  calibrateRollbackOpen,
+  calibrateRollbackStage,
+  calibrateRollbackReason,
+  calibrateRollbackDeadline,
+  calibrateRollbackDeadlineFieldLabel,
+  openCalibrateRollbackDialog,
+  CALIBRATION_ROLLBACK_OPTIONS,
+  calibrateRollbackTargetLabel,
+  startingSelfReview,
+  canIssueSelfReview,
+  canRollbackPlanAnchor,
+  planRollbackAnchorLabel,
+  planRollbackDeadlineFieldLabel,
+  planRollbackOpen,
+  planRollbackDeadline,
+  rollingBackPlan,
   confirmingResult,
   templates,
   templateLoading,
@@ -29,8 +45,12 @@ const {
   goalIndicatorDraft,
   goalSettings,
   formContent,
+  dottedFormContent,
   cultureForm,
+  dottedCultureForm,
   learningForm,
+  dottedLearningForm,
+  dualSupervisorCalibrationEdit,
   personalSummary,
   managerSummary,
   dottedManagerSummary,
@@ -39,8 +59,6 @@ const {
   managerRejectOpen,
   managerRejectReason,
   canRejectSubordinateReview,
-  finalRejectOpen,
-  finalReturnToStage,
   statusInfo,
   currentStepIndex,
   progressValue,
@@ -70,13 +88,20 @@ const {
   removeGoalIndicatorRow,
   startCustomGoalIndicators,
   handleCalibrate,
+  handleCalibrateRollbackConfirm,
+  handleIssueSelfReview,
+  openPlanRollbackDialog,
+  handleRollbackPlanAnchorConfirm,
   handleConfirmResult,
+  stepDeadlineLabel,
   reviewFormTitle,
   stepResponsibleLabel,
   submitReviewButtonLabel,
   showUnifiedReviewMatrix,
   showEmployeeSubmittedSelfReadonly,
   previewEditingTotal,
+  previewManagerEditingTotal,
+  previewDottedEditingTotal,
   readonlyReviewTotals,
   matrixEditSelf,
   matrixEditManager,
@@ -89,6 +114,8 @@ const {
   learningDimensions,
   scoringWeights,
   previewReviewMergedTotal,
+  displayMergedTotalScore,
+  displayDetailTotalScore,
   previewReviewMergedPerfOnlyTotal,
   matrixTemplateTotals,
 } = usePerformanceDetailPage();
@@ -139,13 +166,35 @@ async function pickTemplate(templateId: string) {
 
     <template v-else-if="rec && statusInfo">
 
-      <section class="rounded-md border border-border bg-card p-6 shadow-sm">
+      <section
+        v-if="rec.status === 'issued' && isEmployee"
+        class="rounded-md border border-[var(--warning)] bg-[var(--warning-bg)] p-6 shadow-sm"
+      >
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-foreground">绩效结果确认</h3>
+            <p class="mt-2 text-sm text-muted-foreground">
+              您的绩效结果已由管理员下发，请查看下方评分详情后点击确认。
+            </p>
+          </div>
+          <button
+            type="button"
+            class="ui-btn-primary min-h-11 shrink-0 px-6 text-base font-semibold shadow-sm"
+            :disabled="confirmingResult"
+            @click="handleConfirmResult"
+          >
+            {{ confirmingResult ? "提交中…" : "确认已收到绩效结果" }}
+          </button>
+        </div>
+      </section>
+
+      <section v-if="rec.status !== 'plan_execution'" class="rounded-md border border-border bg-card p-6 shadow-sm">
         <p class="text-sm text-muted-foreground">{{ statusInfo.description }}</p>
       </section>
 
       <section class="rounded-md border border-border bg-card p-6 shadow-sm">
         <h2 class="mb-4 text-base font-semibold">{{ c.basicInfo }}</h2>
-        <div class="grid grid-cols-2 gap-4 md:grid-cols-3">
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
           <div>
             <p class="text-sm text-muted-foreground">{{ c.period }}</p>
             <p class="mt-1 font-medium" :title="rec.period">{{ formatPeriodDisplay(rec.period) }}</p>
@@ -158,8 +207,14 @@ async function pickTemplate(templateId: string) {
             />
           </div>
           <div>
+            <p class="text-sm text-muted-foreground">{{ c.feishuSubject }}</p>
+            <p class="mt-1 font-medium">
+              {{ rec.feishuSubjectName || rec.feishuSubjectCode || "—" }}
+            </p>
+          </div>
+          <div>
             <p class="text-sm text-muted-foreground">{{ c.totalScore }}</p>
-            <p class="mt-1 text-lg font-medium text-primary">{{ formatScore(rec.totalScore) }}</p>
+            <p class="mt-1 text-lg font-medium text-primary">{{ formatScore(displayDetailTotalScore) }}</p>
             <p v-if="rec.scoreGrade" class="mt-1 text-sm text-muted-foreground">
               {{ c.scoreGrade }}：<span class="font-semibold text-foreground">{{ rec.scoreGrade }}</span>
             </p>
@@ -179,7 +234,7 @@ async function pickTemplate(templateId: string) {
           <div class="h-1.5 overflow-hidden rounded-full bg-muted">
             <div class="h-full rounded-full bg-primary transition-all" :style="{ width: `${progressValue}%` }" />
           </div>
-          <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
             <div
               v-for="(step, index) in PERFORMANCE_DETAIL_STEPS"
               :key="step.key"
@@ -208,9 +263,21 @@ async function pickTemplate(templateId: string) {
               <p class="line-clamp-2 text-xs leading-snug text-muted-foreground">
                 {{ stepResponsibleLabel(step.key) }}
               </p>
+              <p v-if="stepDeadlineLabel(step.key)" class="text-xs text-primary/80">
+                截止 {{ stepDeadlineLabel(step.key) }}
+              </p>
             </div>
           </div>
         </div>
+      </section>
+
+      <section
+        v-if="rec.status === 'plan_execution' && isEmployee"
+        class="rounded-md border border-border bg-card p-6 shadow-sm"
+      >
+        <p class="text-sm text-muted-foreground">
+          目标已审核通过，当前处于计划执行阶段。请等待创建该绩效的同事下发「员工自评」后再填写自评内容。
+        </p>
       </section>
 
       <section v-if="showRejectionBanner" class="rounded-md border border-destructive/30 bg-destructive/5 p-6 shadow-sm">
@@ -441,28 +508,14 @@ async function pickTemplate(templateId: string) {
         </button>
       </div>
 
-      <template v-if="rec.status === 'completed' && rec.goalSetting?.length">
-        <section class="rounded-md border border-border bg-card p-6 shadow-sm">
-          <h2 class="mb-4 text-base font-semibold">{{ c.performanceGoal }}</h2>
-          <div class="space-y-4">
-            <div v-for="item in rec.goalSetting" :key="item.indicatorName" class="rounded-md border border-border p-4">
-              <div class="flex items-center justify-between gap-3">
-                <h3 class="font-medium">{{ item.indicatorName }}</h3>
-                <span class="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
-                  {{ c.weight }} {{ item.weight }}%
-                </span>
-              </div>
-              <p v-if="item.criteria" class="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">衡量标准: {{ item.criteria }}</p>
-            </div>
-          </div>
-        </section>
-      </template>
-
       <PerformanceScoringMatrix
         v-if="showUnifiedReviewMatrix"
         v-model:form-content="formContent"
+        v-model:dotted-form-content="dottedFormContent"
         v-model:culture-form="cultureForm"
+        v-model:dotted-culture-form="dottedCultureForm"
         v-model:learning-form="learningForm"
+        v-model:dotted-learning-form="dottedLearningForm"
         v-model:personal-summary="personalSummary"
         v-model:manager-summary="managerSummary"
         v-model:dotted-manager-summary="dottedManagerSummary"
@@ -474,13 +527,17 @@ async function pickTemplate(templateId: string) {
         :matrix-edit-self="matrixEditSelf"
         :matrix-edit-manager="matrixEditManager"
         :matrix-edit-dotted="matrixEditDotted"
+        :dual-supervisor-edit="dualSupervisorCalibrationEdit"
         :readonly-review-totals="readonlyReviewTotals"
         :preview-editing-total="previewEditingTotal"
+        :preview-manager-editing-total="previewManagerEditingTotal"
+        :preview-dotted-editing-total="previewDottedEditingTotal"
         :preview-merged-by-index="previewMergedByIndex"
         :preview-merged-culture-by-name="previewMergedCultureByName"
         :preview-merged-culture-sum="previewMergedCultureSum"
         :preview-merged-learning-by-name="previewMergedLearningByName"
         :preview-review-merged-total="previewReviewMergedTotal"
+        :display-merged-total-score="displayMergedTotalScore"
         :preview-review-merged-perf-only-total="previewReviewMergedPerfOnlyTotal"
         :matrix-template-totals="matrixTemplateTotals"
         :review-form-title="reviewFormTitle()"
@@ -571,14 +628,14 @@ async function pickTemplate(templateId: string) {
         <div class="space-y-4">
           <p class="text-sm text-muted-foreground">
             {{ c.currentTotalLabel }}:
-            <span class="text-lg font-semibold text-primary">{{ formatScore(rec.totalScore) }}</span>
+            <span class="text-lg font-semibold text-primary">{{ formatScore(displayDetailTotalScore) }}</span>
           </p>
         </div>
       </section>
 
       <div
         v-if="showActionBar"
-        class="flex flex-wrap items-center justify-end gap-3 rounded-lg border border-border bg-card p-4 shadow-sm"
+        class="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-border bg-card p-3 shadow-sm md:static md:gap-3 md:p-4"
       >
         <button
           v-if="canEdit && rec.status !== 'goal_pending_review'"
@@ -616,19 +673,131 @@ async function pickTemplate(templateId: string) {
         >
           {{ submittingGoal ? "提交中…" : c.submitGoal }}
         </button>
-        <template v-if="canFinalApprove">
-          <button type="button" class="rounded-md border border-border px-4 py-2 text-sm" :disabled="calibrating" @click="finalRejectOpen = true">
-            {{ c.calibrateReject }}
-          </button>
-          <button type="button" class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground" :disabled="calibrating" @click="handleCalibrate(true)">
-            {{ calibrating ? "处理中…" : c.calibratePass }}
-          </button>
-        </template>
+        <button
+          v-if="canFinalApprove"
+          type="button"
+          class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+          :disabled="calibrating"
+          @click="handleCalibrate()"
+        >
+          {{ calibrating ? "处理中…" : c.calibratePass }}
+        </button>
+        <button
+          v-if="canIssueSelfReview"
+          type="button"
+          class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+          :disabled="startingSelfReview"
+          @click="handleIssueSelfReview"
+        >
+          {{ startingSelfReview ? "处理中…" : "下发员工自评" }}
+        </button>
+        <button
+          v-if="canRollbackPlanAnchor"
+          type="button"
+          class="ui-btn-outline"
+          :disabled="rollingBackPlan"
+          @click="openPlanRollbackDialog"
+        >
+          {{ rollingBackPlan ? "处理中…" : `回退恢复（${planRollbackAnchorLabel}）` }}
+        </button>
+        <button
+          v-if="canFinalApprove"
+          type="button"
+          class="ui-btn-outline"
+          :disabled="calibrating"
+          @click="openCalibrateRollbackDialog"
+        >
+          {{ c.calibrateReject }}
+        </button>
       </div>
     </template>
 
-    <div v-if="rejectOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="rejectOpen = false">
-      <div class="w-full max-w-md space-y-4 rounded-md border border-border bg-card p-6 shadow-sm">
+    <div
+      v-if="planRollbackOpen"
+      class="ui-dialog-backdrop"
+      @click.self="planRollbackOpen = false"
+    >
+      <div class="w-full max-w-md space-y-4 rounded-md border border-border bg-card p-4 shadow-sm md:p-6">
+        <h2 class="text-lg font-semibold text-foreground">回退恢复确认</h2>
+        <p class="text-sm text-muted-foreground">
+          将流程回退至「<span class="font-medium text-foreground">{{ planRollbackAnchorLabel }}</span>」，并更新该节点截止时间。
+        </p>
+        <div>
+          <label class="ui-label block text-sm font-medium">{{ planRollbackDeadlineFieldLabel }}</label>
+          <input
+            v-model="planRollbackDeadline"
+            type="date"
+            class="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+          />
+        </div>
+        <div class="flex justify-end gap-3 pt-2">
+          <button type="button" class="rounded-md border border-border px-4 py-2 text-sm" @click="planRollbackOpen = false">
+            取消
+          </button>
+          <button
+            type="button"
+            class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+            :disabled="rollingBackPlan"
+            @click="handleRollbackPlanAnchorConfirm"
+          >
+            {{ rollingBackPlan ? "处理中…" : "确认回退" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="calibrateRollbackOpen"
+      class="ui-dialog-backdrop"
+      @click.self="calibrateRollbackOpen = false"
+    >
+      <div class="w-full max-w-md space-y-4 rounded-md border border-border bg-card p-4 shadow-sm md:p-6">
+        <h2 class="text-lg font-semibold text-foreground">校准回退确认</h2>
+        <p class="text-sm text-muted-foreground">
+          确认将流程回退至「<span class="font-medium text-foreground">{{ calibrateRollbackTargetLabel }}</span>」？回退后需重新处理该节点，并更新该节点截止时间。
+        </p>
+        <div>
+          <label class="ui-label block text-sm font-medium">回退到</label>
+          <select v-model="calibrateRollbackStage" class="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm">
+            <option v-for="opt in CALIBRATION_ROLLBACK_OPTIONS" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label class="ui-label block text-sm font-medium">{{ calibrateRollbackDeadlineFieldLabel }}</label>
+          <input
+            v-model="calibrateRollbackDeadline"
+            type="date"
+            class="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label class="ui-label block text-sm font-medium">回退说明（选填）</label>
+          <textarea
+            v-model="calibrateRollbackReason"
+            class="mt-1 min-h-[80px] w-full rounded-md border border-border px-3 py-2 text-sm"
+            placeholder="请填写回退原因"
+          />
+        </div>
+        <div class="flex justify-end gap-3 pt-2">
+          <button type="button" class="rounded-md border border-border px-4 py-2 text-sm" @click="calibrateRollbackOpen = false">
+            取消
+          </button>
+          <button
+            type="button"
+            class="rounded-md bg-destructive px-4 py-2 text-sm text-white"
+            :disabled="calibrating"
+            @click="handleCalibrateRollbackConfirm"
+          >
+            {{ calibrating ? "处理中…" : "确认回退" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="rejectOpen" class="ui-dialog-backdrop" @click.self="rejectOpen = false">
+      <div class="w-full max-w-md space-y-4 rounded-md border border-border bg-card p-4 shadow-sm md:p-6">
         <h2 class="text-lg font-semibold text-foreground">{{ c.rejectGoalTitle }}</h2>
         <p class="text-sm text-muted-foreground">{{ c.rejectGoalDesc }}</p>
         <div>
@@ -655,10 +824,10 @@ async function pickTemplate(templateId: string) {
 
     <div
       v-if="managerRejectOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="ui-dialog-backdrop"
       @click.self="managerRejectOpen = false"
     >
-      <div class="w-full max-w-md space-y-4 rounded-md border border-border bg-card p-6 shadow-sm">
+      <div class="w-full max-w-md space-y-4 rounded-md border border-border bg-card p-4 shadow-sm md:p-6">
         <h2 class="text-lg font-semibold text-foreground">{{ c.rejectSelfReviewTitle }}</h2>
         <p class="text-sm text-muted-foreground">{{ c.rejectSelfReviewDesc }}</p>
         <div>
@@ -683,36 +852,6 @@ async function pickTemplate(templateId: string) {
       </div>
     </div>
 
-    <div v-if="finalRejectOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="finalRejectOpen = false">
-      <div class="w-full max-w-md rounded-md border border-border bg-card p-6 shadow-sm">
-        <textarea v-model="rejectReason" class="min-h-[100px] w-full rounded-md border border-border px-3 py-2 text-sm" />
-        <select v-model="finalReturnToStage" class="mt-4 w-full rounded-md border border-border bg-card px-3 py-2 text-sm">
-          <option value="self_review">{{ c.stageSelfReview }}</option>
-          <option value="dual_manager_review">{{ c.stageDualReview }}</option>
-          <option value="manager_review">{{ c.stageManagerReview }}</option>
-          <option value="dotted_manager_review">{{ c.stageDottedReview }}</option>
-        </select>
-        <div class="mt-4 flex justify-end gap-3">
-          <button type="button" class="rounded-md border border-border px-4 py-2 text-sm" @click="finalRejectOpen = false">{{ c.cancel }}</button>
-          <button type="button" class="rounded-md bg-destructive px-4 py-2 text-sm text-white" :disabled="calibrating" @click="handleCalibrate(false)">
-            {{ calibrating ? "处理中…" : c.confirmReject }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 员工确认 -->
-    <section v-if="rec && rec.status === 'issued' && isEmployee" class="rounded-md border border-[var(--warning)] bg-[var(--warning-bg)] p-6 shadow-sm">
-      <h3 class="mb-4 text-base font-semibold text-foreground">绩效结果确认</h3>
-      <p class="mb-4 text-sm text-muted-foreground">
-        您的绩效结果已由管理员下发，请查看上方评分详情后点击确认。
-      </p>
-      <div class="flex gap-3">
-        <button type="button" class="rounded-md bg-primary px-5 py-2 text-sm text-primary-foreground" :disabled="confirmingResult" @click="handleConfirmResult">
-          {{ confirmingResult ? "提交中…" : "确认已收到绩效结果" }}
-        </button>
-      </div>
-    </section>
 
     <!-- 已完成 -->
     <section v-if="rec && rec.status === 'completed'" class="rounded-md border border-[var(--success)] bg-[var(--success-bg)] p-6 shadow-sm">
@@ -722,10 +861,10 @@ async function pickTemplate(templateId: string) {
     <!-- 模板库选择 -->
     <div
       v-if="templatePickerOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="ui-dialog-backdrop"
       @click.self="closeTemplatePicker"
     >
-      <div class="ui-card flex max-h-[min(85vh,720px)] w-full max-w-2xl flex-col p-6">
+      <div class="ui-card flex max-h-[min(85vh,720px)] w-full max-w-2xl flex-col p-4 md:p-6">
         <div class="mb-4 flex items-start justify-between gap-3">
           <div>
             <h2 class="text-lg font-semibold">选择绩效模板</h2>

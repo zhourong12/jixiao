@@ -1,5 +1,5 @@
 server:
-  port: 8081
+  port: ${SERVER_PORT:8081}
   error:
     include-message: always
 
@@ -12,8 +12,6 @@ spring:
     password: ${JIXIAO2_JDBC_PASSWORD:e+ZmCeLXY9UBqbbS}
 
 jixiao2:
-  auth:
-    password-login-enabled: ${PASSWORD_LOGIN_ENABLED:true}
   cors:
     allowed-origin-patterns: ${JIXIAO2_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*}
   session:

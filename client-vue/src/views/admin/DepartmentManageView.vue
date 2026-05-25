@@ -211,14 +211,31 @@ watch([page, pageSize], () => void load());
         </div>
         <div class="flex flex-col gap-1">
           <label class="ui-label">部门名称</label>
-          <input v-model="keyword" class="ui-input w-48" placeholder="关键词" @keyup.enter="search" />
+          <input v-model="keyword" class="ui-input w-full md:w-48" placeholder="关键词" @keyup.enter="search" />
         </div>
         <button type="button" class="ui-btn-primary" @click="search">查询</button>
       </div>
 
       <section class="ui-list-panel">
         <div v-if="loading" class="ui-loading">加载中…</div>
-        <div v-else class="ui-table-wrap">
+        <template v-else>
+          <div class="ui-mobile-cards">
+            <div v-if="items.length === 0" class="py-6 text-center text-sm text-muted-foreground">暂无部门</div>
+            <div v-for="row in items" :key="row.id" class="ui-card flex items-start justify-between gap-3 p-4">
+              <div class="min-w-0 flex-1">
+                <span class="font-semibold">{{ row.name }}</span>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  {{ row.subjectName || row.subjectCode }} · {{ row.employeeCount }} 名员工
+                </p>
+              </div>
+              <div class="flex shrink-0 gap-2">
+                <button type="button" class="ui-btn-ghost ui-btn-sm" @click="openEdit(row)">编辑</button>
+                <button type="button" class="ui-btn-ghost ui-btn-sm text-danger" @click="remove(row)">删除</button>
+              </div>
+            </div>
+          </div>
+          <div class="ui-desktop-table">
+          <div class="ui-table-wrap">
           <table class="ui-table min-w-[560px]">
             <thead>
               <tr>
@@ -244,16 +261,18 @@ watch([page, pageSize], () => void load());
             </tbody>
           </table>
         </div>
+          </div>
+        </template>
         <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </section>
     </div>
 
     <div
       v-if="dialogOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="ui-dialog-backdrop"
       @click.self="closeDialog"
     >
-      <div class="ui-card w-full max-w-md p-6">
+      <div class="ui-card w-full max-w-md p-4 md:p-6">
         <h2 class="text-lg font-semibold">{{ dialogMode === "create" ? "新增部门" : "编辑部门" }}</h2>
         <label v-if="dialogMode === 'create'" class="mt-4 block">
           <span class="ui-label">飞书主体</span>

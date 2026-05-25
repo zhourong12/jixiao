@@ -304,7 +304,24 @@ watch(formType, (t) => {
     <p v-if="message && !dialogOpen" class="text-sm text-destructive">{{ message }}</p>
     <section class="ui-list-panel">
       <div v-if="loading" class="ui-loading">加载中...</div>
-      <div v-else class="ui-table-wrap">
+      <template v-else>
+        <div class="ui-mobile-cards">
+          <div v-for="row in items" :key="row.id" class="ui-card flex items-start justify-between gap-3 p-4">
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-semibold">{{ row.name }}</span>
+                <span class="rounded-full bg-accent px-2 py-0.5 text-xs text-accent-foreground">{{ { performance: "绩效", culture: "文化价值观", learning: "学习与成长" }[row.type || "performance"] || row.type }}</span>
+                <span class="rounded-full px-2 py-0.5 text-xs" :class="row.status === 'enabled' ? 'bg-success-bg text-success' : 'bg-muted text-muted-foreground'">{{ row.status === "enabled" ? "启用" : "停用" }}</span>
+              </div>
+              <p class="mt-1 text-xs text-muted-foreground">
+                {{ row.indicatorCount }} 项指标<span v-if="row.position"> · {{ row.position }}</span>
+              </p>
+            </div>
+            <button type="button" class="shrink-0 text-sm text-primary hover:underline" @click="edit(row)">编辑</button>
+          </div>
+        </div>
+        <div class="ui-desktop-table">
+        <div class="ui-table-wrap">
         <table class="ui-table min-w-[720px]">
           <thead>
             <tr>
@@ -337,6 +354,8 @@ watch(formType, (t) => {
           </tbody>
         </table>
       </div>
+        </div>
+      </template>
       <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </section>
     <div

@@ -1,0 +1,67 @@
+2026-05-25 12:27:06.128  INFO 43648 --- [main] c.j.server.Jixiao2ServerApplication      : Starting Jixiao2ServerApplication v0.0.1-SNAPSHOT using Java 1.8.0_482 on WIN-G1VMINRDQDQ with PID 43648 (D:\zr\code\jixiao2\dist\server\server-0.0.1-SNAPSHOT.jar started by Administrator in D:\zr\code\jixiao2)
+2026-05-25 12:27:06.134  INFO 43648 --- [main] c.j.server.Jixiao2ServerApplication      : No active profile set, falling back to 1 default profile: "default"
+2026-05-25 12:27:07.516  INFO 43648 --- [main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8081 (http)
+2026-05-25 12:27:07.525  INFO 43648 --- [main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-05-25 12:27:07.527  INFO 43648 --- [main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.83]
+2026-05-25 12:27:07.592  INFO 43648 --- [main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-05-25 12:27:07.592  INFO 43648 --- [main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1411 ms
+2026-05-25 12:27:09.507  INFO 43648 --- [main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 3 endpoint(s) beneath base path '/actuator'
+2026-05-25 12:27:09.565  INFO 43648 --- [main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8081 (http) with context path ''
+2026-05-25 12:27:09.588  INFO 43648 --- [main] c.j.server.Jixiao2ServerApplication      : Started Jixiao2ServerApplication in 3.872 seconds (JVM running for 4.197)
+2026-05-25 12:27:36.758  INFO 43648 --- [http-nio-8081-exec-1] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-05-25 12:27:36.759  INFO 43648 --- [http-nio-8081-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-05-25 12:27:36.762  INFO 43648 --- [http-nio-8081-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 3 ms
+2026-05-25 12:27:36.838  INFO 43648 --- [http-nio-8081-exec-8] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-05-25 12:27:37.547  INFO 43648 --- [http-nio-8081-exec-8] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-05-25 12:33:56.911  INFO 42316 --- [main] c.j.server.Jixiao2ServerApplication      : Starting Jixiao2ServerApplication v0.0.1-SNAPSHOT using Java 1.8.0_482 on WIN-G1VMINRDQDQ with PID 42316 (D:\zr\code\jixiao2\dist\server\server-0.0.1-SNAPSHOT.jar started by Administrator in D:\zr\code\jixiao2)
+2026-05-25 12:33:56.913  INFO 42316 --- [main] c.j.server.Jixiao2ServerApplication      : No active profile set, falling back to 1 default profile: "default"
+2026-05-25 12:33:58.205  INFO 42316 --- [main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8081 (http)
+2026-05-25 12:33:58.212  INFO 42316 --- [main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-05-25 12:33:58.212  INFO 42316 --- [main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.83]
+2026-05-25 12:33:58.267  INFO 42316 --- [main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-05-25 12:33:58.267  INFO 42316 --- [main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1303 ms
+2026-05-25 12:33:58.968  INFO 42316 --- [main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-05-25 12:33:59.462  INFO 42316 --- [main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-05-25 12:34:00.359  INFO 42316 --- [main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 3 endpoint(s) beneath base path '/actuator'
+2026-05-25 12:34:00.414  INFO 42316 --- [main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8081 (http) with context path ''
+2026-05-25 12:34:00.438  INFO 42316 --- [main] c.j.server.Jixiao2ServerApplication      : Started Jixiao2ServerApplication in 3.928 seconds (JVM running for 4.236)
+2026-05-25 12:34:22.401  INFO 42316 --- [http-nio-8081-exec-2] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-05-25 12:34:22.401  INFO 42316 --- [http-nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-05-25 12:34:22.402  INFO 42316 --- [http-nio-8081-exec-2] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+2026-05-25 12:44:54.379  INFO 42316 --- [http-nio-8081-exec-2] c.j.s.performance.PerformanceService     : 绩效列表查询: userId=ou_754baa28177c2666a537fb702a286192, roles=[super_admin], total=1
+2026-05-25 12:44:56.094  INFO 42316 --- [http-nio-8081-exec-3] c.j.s.performance.PerformanceService     : 绩效列表查询: userId=ou_754baa28177c2666a537fb702a286192, roles=[super_admin], total=1
+2026-05-25 13:13:56.285  INFO 42316 --- [http-nio-8081-exec-6] c.j.s.performance.PerformanceService     : 绩效列表查询: userId=ou_754baa28177c2666a537fb702a286192, roles=[super_admin], total=1
+2026-05-25 13:13:57.458  INFO 42316 --- [http-nio-8081-exec-8] c.j.s.performance.PerformanceService     : [getPerformanceDetail] recordId=6d98dab1-3830-47f8-bec0-826ce097b071 viewerUserId=ou_754baa28177c2666a537fb702a286192 perfTemplateId=b2e0773e-ea0a-4282-b5a8-a9f47367fc5e culture_template_id=null cultureRawDbSnippet=[{"name": "利他", "criteria": "优秀(7分)，合格(4-6分)，不合格(0分)", "maxScore": 7, "description": "1. 客户为先，不断完善产品与服务，为用户创造价值。\n2. 分享与互助，不断提升能力与效率。\n3. 让和你合作的人成功，相互成就。"}, {"name": "本分", "criteria": "优秀(7分)，合格(4-6分)，不合格(0分)", "maxScore": 7, "description": "1. 以诚相待，高效沟通。\n2. 实事求是，说到做到。\n3. 敢于质疑，敢于挑战，抓住事物本质。\n4. 坚持自我批判，不断超越自我。"}, {"name": "结果导向", "criteria": "优秀(6分)，合格(3-5分)，不合格(0分)", "maxScore": 6, "description": "1. 以结果来驱动行为，对结果负责。\n2. 不找借口，突破客观条件限制，整合资源，不惜一切达成结果。\n3. 关注团队结果，团队成功才有个人价值。"}] cultureParsedMaxScoreSum=20.0 cultureParsedDims=[{name=利他, criteria=优秀(7分)，合格(4-6分)，不合格(0分), maxScore=7, description=1. 客户为先，不断完善产品与服务，为用户创造价值。
+2. 分享与互助，不断提升能力与效率。
+3. 让和你合作的人成功，相互成就。}, {name=本分, criteria=优秀(7分)，合格(4-6分)，不合格(0分), maxScore=7, description=1. 以诚相待，高效沟通。
+2. 实事求是，说到做到。
+3. 敢于质疑，敢于挑战，抓住事物本质。
+4. 坚持自我批判，不断超越自我。}, {name=结果导向, criteria=优秀(6分)，合格(3-5分)，不合格(0分), maxScore=6, description=1. 以结果来驱动行为，对结果负责。
+2. 不找借口，突破客观条件限制，整合资源，不惜一切达成结果。
+3. 关注团队结果，团队成功才有个人价值。}]
+2026-05-25 13:14:04.176  INFO 42316 --- [http-nio-8081-exec-7] c.j.s.performance.PerformanceService     : 绩效 6d98dab1-3830-47f8-bec0-826ce097b071 已提交，新状态: manager_review
+2026-05-25 13:14:04.267  INFO 42316 --- [http-nio-8081-exec-7] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标因绩效变更触发 recordId=6d98dab1-3830-47f8-bec0-826ce097b071 employeeIds=[ou_754baa28177c2666a537fb702a286192, ou_64601fdbfef561244d09c4c4df3866ca]
+2026-05-25 13:14:04.311  INFO 42316 --- [http-nio-8081-exec-7] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标已排队异步同步 trigger=performance_record:6d98dab1-3830-47f8-bec0-826ce097b071 employeeIds=[ou_754baa28177c2666a537fb702a286192, ou_64601fdbfef561244d09c4c4df3866ca]
+2026-05-25 13:14:04.356  INFO 42316 --- [http-nio-8081-exec-7] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标已排队异步同步 trigger=performance_actor employeeIds=[ou_754baa28177c2666a537fb702a286192]
+2026-05-25 13:14:04.448  INFO 42316 --- [feishu-perf-notify-1] c.j.s.f.FeishuEmployeeMessagingService   : 飞书员工消息 resolve employeeId=ou_64601fdbfef561244d09c4c4df3866ca feishuSubjectId=a0000001-0000-4000-8000-000000000001 performanceNotifyEnabledRaw=true rawType=java.lang.Boolean subjectPerformanceNotifyEnabled=true
+2026-05-25 13:14:04.504  INFO 42316 --- [http-nio-8081-exec-9] c.j.s.performance.PerformanceService     : [getPerformanceDetail] recordId=6d98dab1-3830-47f8-bec0-826ce097b071 viewerUserId=ou_754baa28177c2666a537fb702a286192 perfTemplateId=b2e0773e-ea0a-4282-b5a8-a9f47367fc5e culture_template_id=null cultureRawDbSnippet=[{"name": "利他", "criteria": "优秀(7分)，合格(4-6分)，不合格(0分)", "maxScore": 7, "description": "1. 客户为先，不断完善产品与服务，为用户创造价值。\n2. 分享与互助，不断提升能力与效率。\n3. 让和你合作的人成功，相互成就。"}, {"name": "本分", "criteria": "优秀(7分)，合格(4-6分)，不合格(0分)", "maxScore": 7, "description": "1. 以诚相待，高效沟通。\n2. 实事求是，说到做到。\n3. 敢于质疑，敢于挑战，抓住事物本质。\n4. 坚持自我批判，不断超越自我。"}, {"name": "结果导向", "criteria": "优秀(6分)，合格(3-5分)，不合格(0分)", "maxScore": 6, "description": "1. 以结果来驱动行为，对结果负责。\n2. 不找借口，突破客观条件限制，整合资源，不惜一切达成结果。\n3. 关注团队结果，团队成功才有个人价值。"}] cultureParsedMaxScoreSum=20.0 cultureParsedDims=[{name=利他, criteria=优秀(7分)，合格(4-6分)，不合格(0分), maxScore=7, description=1. 客户为先，不断完善产品与服务，为用户创造价值。
+2. 分享与互助，不断提升能力与效率。
+3. 让和你合作的人成功，相互成就。}, {name=本分, criteria=优秀(7分)，合格(4-6分)，不合格(0分), maxScore=7, description=1. 以诚相待，高效沟通。
+2. 实事求是，说到做到。
+3. 敢于质疑，敢于挑战，抓住事物本质。
+4. 坚持自我批判，不断超越自我。}, {name=结果导向, criteria=优秀(6分)，合格(3-5分)，不合格(0分), maxScore=6, description=1. 以结果来驱动行为，对结果负责。
+2. 不找借口，突破客观条件限制，整合资源，不惜一切达成结果。
+3. 关注团队结果，团队成功才有个人价值。}]
+2026-05-25 13:14:04.553  INFO 42316 --- [feishu-badge-sync-1] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标同步开始 trigger=performance_record:6d98dab1-3830-47f8-bec0-826ce097b071 employeeId=ou_754baa28177c2666a537fb702a286192 name=周荣 subjectCode=kzs subjectId=a0000001-0000-4000-8000-000000000001 openId=ou_754baa28177c2666a537fb702a286192 todoCount=0
+2026-05-25 13:14:04.735  INFO 42316 --- [feishu-badge-sync-1] c.j.server.feishu.FeishuAppBadgeService  : 飞书应用角标请求 subjectId=a0000001-0000-4000-8000-000000000001 appId=cli_a95e20834da35ccb openId=ou_754baa28177c2666a537fb702a286192 badgeNum=0 version=1779686044736
+2026-05-25 13:14:04.988  INFO 42316 --- [feishu-badge-sync-1] c.j.server.feishu.FeishuAppBadgeService  : 飞书应用角标已设置 subjectId=a0000001-0000-4000-8000-000000000001 appId=cli_a95e20834da35ccb openId=ou_754baa28177c2666a537fb702a286192 badgeNum=0 version=1779686044736
+2026-05-25 13:14:04.989  INFO 42316 --- [feishu-badge-sync-1] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标同步结束 trigger=performance_record:6d98dab1-3830-47f8-bec0-826ce097b071 employeeId=ou_754baa28177c2666a537fb702a286192 subjectCode=kzs openId=ou_754baa28177c2666a537fb702a286192 todoCount=0 success=true
+2026-05-25 13:14:05.182  INFO 42316 --- [feishu-badge-sync-1] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标同步开始 trigger=performance_record:6d98dab1-3830-47f8-bec0-826ce097b071 employeeId=ou_64601fdbfef561244d09c4c4df3866ca name=曾朝聪 subjectCode=kzs subjectId=a0000001-0000-4000-8000-000000000001 openId=ou_64601fdbfef561244d09c4c4df3866ca todoCount=1
+2026-05-25 13:14:05.279  INFO 42316 --- [feishu-badge-sync-1] c.j.server.feishu.FeishuAppBadgeService  : 飞书应用角标请求 subjectId=a0000001-0000-4000-8000-000000000001 appId=cli_a95e20834da35ccb openId=ou_64601fdbfef561244d09c4c4df3866ca badgeNum=1 version=1779686045280
+2026-05-25 13:14:05.416  INFO 42316 --- [feishu-perf-notify-1] c.j.s.p.PerformanceFeishuNotifier        : 绩效飞书通知已发送(interactive) nodeKey=manager title=【绩效】待审核员工自评 employeeName=曾朝聪 employeeId=ou_64601fdbfef561244d09c4c4df3866ca receiveId=ou_64601fdbfef561244d09c4c4df3866ca
+2026-05-25 13:14:05.502  INFO 42316 --- [feishu-badge-sync-1] c.j.server.feishu.FeishuAppBadgeService  : 飞书应用角标已设置 subjectId=a0000001-0000-4000-8000-000000000001 appId=cli_a95e20834da35ccb openId=ou_64601fdbfef561244d09c4c4df3866ca badgeNum=1 version=1779686045280
+2026-05-25 13:14:05.502  INFO 42316 --- [feishu-badge-sync-1] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标同步结束 trigger=performance_record:6d98dab1-3830-47f8-bec0-826ce097b071 employeeId=ou_64601fdbfef561244d09c4c4df3866ca subjectCode=kzs openId=ou_64601fdbfef561244d09c4c4df3866ca todoCount=1 success=true
+2026-05-25 13:14:05.698  INFO 42316 --- [feishu-badge-sync-1] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标同步开始 trigger=performance_actor employeeId=ou_754baa28177c2666a537fb702a286192 name=周荣 subjectCode=kzs subjectId=a0000001-0000-4000-8000-000000000001 openId=ou_754baa28177c2666a537fb702a286192 todoCount=0
+2026-05-25 13:14:05.795  INFO 42316 --- [feishu-badge-sync-1] c.j.server.feishu.FeishuAppBadgeService  : 飞书应用角标请求 subjectId=a0000001-0000-4000-8000-000000000001 appId=cli_a95e20834da35ccb openId=ou_754baa28177c2666a537fb702a286192 badgeNum=0 version=1779686044737
+2026-05-25 13:14:06.000  INFO 42316 --- [feishu-badge-sync-1] c.j.server.feishu.FeishuAppBadgeService  : 飞书应用角标已设置 subjectId=a0000001-0000-4000-8000-000000000001 appId=cli_a95e20834da35ccb openId=ou_754baa28177c2666a537fb702a286192 badgeNum=0 version=1779686044737
+2026-05-25 13:14:06.000  INFO 42316 --- [feishu-badge-sync-1] c.j.s.feishu.FeishuBadgeSyncService      : 飞书应用角标同步结束 trigger=performance_actor employeeId=ou_754baa28177c2666a537fb702a286192 subjectCode=kzs openId=ou_754baa28177c2666a537fb702a286192 todoCount=0 success=true

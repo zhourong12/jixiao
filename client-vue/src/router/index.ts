@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { useAuthLoginStore } from "@/stores/authLogin";
 import { useSessionStore } from "@/stores/session";
 import AppLayout from "@/layouts/AppLayout.vue";
 import LoginView from "@/views/LoginView.vue";
@@ -17,7 +18,8 @@ import DepartmentManageView from "@/views/admin/DepartmentManageView.vue";
 import RoleManageView from "@/views/admin/RoleManageView.vue";
 import PermissionManageView from "@/views/admin/PermissionManageView.vue";
 import StatisticsMonthsView from "@/views/admin/StatisticsMonthsView.vue";
-import PerformanceFeishuTaskConfigView from "@/views/admin/PerformanceFeishuTaskConfigView.vue";
+import SystemConfigView from "@/views/admin/SystemConfigView.vue";
+import ApiTokenManageView from "@/views/admin/ApiTokenManageView.vue";
 import NotFoundView from "@/views/NotFoundView.vue";
 
 const router = createRouter({
@@ -110,9 +112,18 @@ const router = createRouter({
           meta: { title: "周期与评选", menuKey: "admin_statistics_months" as const },
         },
         {
+          path: "admin/system-config",
+          component: SystemConfigView,
+          meta: { title: "系统配置", menuKey: "admin_performance_feishu_task" as const },
+        },
+        {
+          path: "admin/api-tokens",
+          component: ApiTokenManageView,
+          meta: { title: "API Token", menuKey: "admin_api_tokens" as const },
+        },
+        {
           path: "admin/performance-feishu-task",
-          component: PerformanceFeishuTaskConfigView,
-          meta: { title: "飞书绩效待办", menuKey: "admin_performance_feishu_task" as const },
+          redirect: "/admin/system-config",
         },
       ],
     },
@@ -127,8 +138,12 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const session = useSessionStore();
+  const authLogin = useAuthLoginStore();
   if (!session.loaded) {
     await session.bootstrap();
+  }
+  if (to.name === "login" || to.name === "feishu-login-entry") {
+    await authLogin.refresh();
   }
   if ((to.name === "login" || to.name === "feishu-login-entry") && session.loggedIn) {
     const next =

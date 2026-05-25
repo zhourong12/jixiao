@@ -10,6 +10,15 @@ export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** 分项加权平均后再乘方案占比（绩效/学习总分行展示用） */
+export function applySchemeWeightPortion(internalRate: number | null, portionPct: number): number | null {
+  if (internalRate === null) return null;
+  if (portionPct > 0) {
+    return round2(internalRate * (portionPct / 100));
+  }
+  return internalRate;
+}
+
 /** 学习类 JSON 常用 name，绩效类用 indicatorName */
 export function reviewItemDimensionKey(it: ReviewItem & { name?: string }): string {
   return it.indicatorName || it.name || "";

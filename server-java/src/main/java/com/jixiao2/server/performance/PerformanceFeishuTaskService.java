@@ -1,7 +1,6 @@
 package com.jixiao2.server.performance;
 
 import com.jixiao2.server.feishu.FeishuEmployeeMessagingService;
-import com.jixiao2.server.feishu.FeishuImService;
 import com.jixiao2.server.feishu.FeishuTaskService;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -27,19 +26,19 @@ public class PerformanceFeishuTaskService {
   private static final ZoneId CN = ZoneId.of("Asia/Shanghai");
 
   private final JdbcTemplate jdbc;
-  private final FeishuImService feishuImService;
   private final FeishuTaskService feishuTaskService;
   private final FeishuEmployeeMessagingService feishuEmployeeMessaging;
+  private final PerformanceFeishuLogNames logNames;
 
   public PerformanceFeishuTaskService(
       JdbcTemplate jdbc,
-      FeishuImService feishuImService,
       FeishuTaskService feishuTaskService,
-      FeishuEmployeeMessagingService feishuEmployeeMessaging) {
+      FeishuEmployeeMessagingService feishuEmployeeMessaging,
+      PerformanceFeishuLogNames logNames) {
     this.jdbc = jdbc;
-    this.feishuImService = feishuImService;
     this.feishuTaskService = feishuTaskService;
     this.feishuEmployeeMessaging = feishuEmployeeMessaging;
+    this.logNames = logNames;
   }
 
   public static String statusToNodeKey(String status) {
@@ -52,6 +51,9 @@ public class PerformanceFeishuTaskService {
     }
     if ("goal_pending_review".equals(s)) {
       return "goal_review";
+    }
+    if ("plan_execution".equals(s)) {
+      return null;
     }
     if ("self_review".equals(s)) {
       return "self";
@@ -138,9 +140,9 @@ public class PerformanceFeishuTaskService {
     if (opt.isPresent() && opt.get().isOk()) {
       FeishuEmployeeMessagingService.FeishuMessagingContext ctx = opt.get();
       try {
-        String token = feishuImService.fetchTenantAccessToken(ctx.getImAppId(), ctx.getImAppSecret());
         if (guid != null && !guid.trim().isEmpty()) {
-          feishuTaskService.completeTask(token, guid.trim());
+          feishuTaskService.completeTaskWithRetry(
+              ctx.getImAppId(), ctx.getImAppSecret(), guid.trim());
         }
       } catch (Exception e) {
         log.warn("飞书待办完成（旧单）异常 taskRowId={}", id, e);
@@ -189,7 +191,6 @@ public class PerformanceFeishuTaskService {
 
   public void createAfterImSuccess(
       FeishuEmployeeMessagingService.FeishuMessagingContext ctx,
-      String tenantToken,
       String receiveOpenId,
       String assigneeEmployeeId,
       String recordId,
@@ -233,16 +234,18 @@ public class PerformanceFeishuTaskService {
         sum,
         desc,
         dueAt);
-    String guid = feishuTaskService.createTask(tenantToken, summary, desc, receiveOpenId, dueMs);
+    String guid =
+        feishuTaskService.createTaskWithRetry(
+            ctx.getImAppId(), ctx.getImAppSecret(), summary, desc, receiveOpenId, dueMs);
     if (guid == null || guid.trim().isEmpty()) {
       jdbc.update(
           "UPDATE performance_feishu_task SET status = 'cancelled', completed_at = NOW() WHERE id = ?",
           rowId);
       log.warn(
-          "飞书待办创建失败已标记 cancelled recordId={} nodeKey={} assignee={}",
+          "飞书待办创建失败已标记 cancelled recordId={} nodeKey={} {}",
           recordId,
           nodeKey,
-          assigneeEmployeeId);
+          logNames.assignee(assigneeEmployeeId));
     } else {
       jdbc.update("UPDATE performance_feishu_task SET feishu_task_guid = ? WHERE id = ?", guid.trim(), rowId);
     }
@@ -288,10 +291,10 @@ public class PerformanceFeishuTaskService {
       String ids =
           rows.stream().map(r -> String.valueOf(r.get("id"))).collect(Collectors.joining(","));
       log.info(
-          "{} goal_submit:auto_complete_pending recordId={} nodeKey=goal assigneeEmployeeId={} pendingRowCount={} taskRowIds=[{}]",
+          "{} goal_submit:auto_complete_pending recordId={} nodeKey=goal {} pendingRowCount={} taskRowIds=[{}]",
           FEISHU_TASK_TRACE,
           recordId.trim(),
-          assigneeEmployeeIdOrNull.trim(),
+          logNames.assignee(assigneeEmployeeIdOrNull),
           rows.size(),
           ids);
     }
@@ -312,15 +315,16 @@ public class PerformanceFeishuTaskService {
     if (opt.isPresent() && opt.get().isOk()) {
       FeishuEmployeeMessagingService.FeishuMessagingContext ctx = opt.get();
       try {
-        String token = feishuImService.fetchTenantAccessToken(ctx.getImAppId(), ctx.getImAppSecret());
         if (guid != null && !guid.trim().isEmpty()) {
-          boolean fsOk = feishuTaskService.completeTask(token, guid.trim());
+          boolean fsOk =
+              feishuTaskService.completeTaskWithRetry(
+                  ctx.getImAppId(), ctx.getImAppSecret(), guid.trim());
           if (traceGoalSubmit) {
             log.info(
-                "{} goal_submit:feishu_complete_task taskRowId={} assignee={} feishuGuid={} feishuApiOk={}",
+                "{} goal_submit:feishu_complete_task taskRowId={} nodeKey=goal {} feishuGuid={} feishuApiOk={}",
                 FEISHU_TASK_TRACE,
                 id,
-                assignee,
+                logNames.assignee(assignee),
                 guid.trim(),
                 fsOk);
           }
@@ -335,10 +339,10 @@ public class PerformanceFeishuTaskService {
             id);
     if (traceGoalSubmit) {
       log.info(
-          "{} goal_submit:local_mark_completed taskRowId={} assignee={} hasFeishuGuid={} dbRowsUpdated={}",
+          "{} goal_submit:local_mark_completed taskRowId={} nodeKey=goal {} hasFeishuGuid={} dbRowsUpdated={}",
           FEISHU_TASK_TRACE,
           id,
-          assignee,
+          logNames.assignee(assignee),
           guid != null && !guid.trim().isEmpty(),
           updated);
     }
@@ -350,9 +354,9 @@ public class PerformanceFeishuTaskService {
     }
     if ("goal".equals(reviewType)) {
       log.info(
-          "{} goal_submit:begin actorUserId={} recordId={} oldStatus={}",
+          "{} goal_submit:begin nodeKey=goal {} recordId={} oldStatus={}",
           FEISHU_TASK_TRACE,
-          actorUserId.trim(),
+          logNames.assignee(actorUserId),
           recordId.trim(),
           oldStatus);
       completePending(recordId, "goal", actorUserId);

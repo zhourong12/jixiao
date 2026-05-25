@@ -24,5 +24,6 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/admin/roles", label: "角色管理", menuKey: "admin_roles" },
   { path: "/admin/permissions", label: "权限管理", menuKey: "admin_permissions" },
   { path: "/admin/statistics-months", label: "周期与评选", menuKey: "admin_statistics_months" },
-  { path: "/admin/performance-feishu-task", label: "飞书绩效待办", menuKey: "admin_performance_feishu_task" },
+  { path: "/admin/system-config", label: "系统配置", menuKey: "admin_performance_feishu_task" },
+  { path: "/admin/api-tokens", label: "API Token", menuKey: "admin_api_tokens" },
 ];

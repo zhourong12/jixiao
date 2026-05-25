@@ -35,10 +35,9 @@ import org.springframework.web.server.ResponseStatusException;
 public class EmployeeService {
 
   private static final Logger log = LoggerFactory.getLogger(EmployeeService.class);
+  /** 飞书员工同步 / Directory 席位扫描诊断日志前缀 */
+  private static final String FEISHU_SYNC_TRACE = "[feishu-sync]";
   private static final ObjectMapper MAPPER = new ObjectMapper();
-
-  /** 绩效校准负责人（employee_id 列表，JSON 数组），在员工管理中配置 */
-  public static final String KEY_PERFORMANCE_CALIBRATION_ASSIGNEE_IDS = "performance_calibration_assignee_ids";
 
   private final JdbcTemplate jdbc;
   private final FeishuRegistryService feishuRegistry;
@@ -54,106 +53,6 @@ public class EmployeeService {
     this.feishuRegistry = feishuRegistry;
     this.menuPermissionService = menuPermissionService;
     this.orgDepartmentService = orgDepartmentService;
-  }
-
-  /** 读取配置的校准负责人 id 列表（顺序保留；无配置或非法 JSON 返回空列表）。 */
-  public List<String> readCalibrationAssigneeEmployeeIds() {
-    List<String> rows =
-        jdbc.query(
-            "SELECT config_value FROM system_config WHERE config_key = ? LIMIT 1",
-            (rs, rn) -> rs.getString(1),
-            KEY_PERFORMANCE_CALIBRATION_ASSIGNEE_IDS);
-    String raw = rows.isEmpty() ? null : rows.get(0);
-    if (raw == null || raw.trim().isEmpty()) {
-      return Collections.emptyList();
-    }
-    try {
-      JsonNode n = MAPPER.readTree(raw);
-      if (!n.isArray()) {
-        return Collections.emptyList();
-      }
-      List<String> out = new ArrayList<String>();
-      for (JsonNode x : n) {
-        if (x.isTextual()) {
-          String id = x.asText().trim();
-          if (!id.isEmpty()) {
-            out.add(id);
-          }
-        }
-      }
-      return out;
-    } catch (Exception e) {
-      log.warn("parse {} failed: {}", KEY_PERFORMANCE_CALIBRATION_ASSIGNEE_IDS, e.getMessage());
-      return Collections.emptyList();
-    }
-  }
-
-  /** 供绩效详情与员工管理展示：含姓名（档案中无则姓名为空字符串）。 */
-  public List<Map<String, Object>> listCalibrationAssigneesWithNames() {
-    List<String> ids = readCalibrationAssigneeEmployeeIds();
-    List<Map<String, Object>> items = new ArrayList<Map<String, Object>>();
-    for (String id : ids) {
-      Map<String, Object> row = new LinkedHashMap<String, Object>();
-      row.put("employeeId", id);
-      List<String> names =
-          jdbc.query(
-              "SELECT name FROM employee_hierarchy WHERE employee_id = ? LIMIT 1",
-              (rs, rn) -> {
-                String nm = rs.getString("name");
-                return nm == null ? "" : nm.trim();
-              },
-              id);
-      row.put("name", names.isEmpty() ? "" : names.get(0));
-      items.add(row);
-    }
-    return items;
-  }
-
-  /** 保存校准负责人；须具备员工管理菜单权限；id 须在 employee_hierarchy 中存在。 */
-  public void setCalibrationAssigneeEmployeeIds(String operatorUserId, List<String> employeeIds) {
-    menuPermissionService.assertMenuAllowed(operatorUserId, "admin_employees");
-    LinkedHashSet<String> unique = new LinkedHashSet<String>();
-    if (employeeIds != null) {
-      for (String id : employeeIds) {
-        if (id == null) {
-          continue;
-        }
-        String t = id.trim();
-        if (!t.isEmpty()) {
-          unique.add(t);
-        }
-      }
-    }
-    for (String id : unique) {
-      Integer c =
-          jdbc.queryForObject(
-              "SELECT COUNT(*) FROM employee_hierarchy WHERE employee_id = ?", Integer.class, id);
-      if (c == null || c == 0) {
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "员工不存在: " + id);
-      }
-    }
-    String json;
-    try {
-      json = MAPPER.writeValueAsString(new ArrayList<String>(unique));
-    } catch (Exception e) {
-      throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "序列化配置失败");
-    }
-    Integer exists =
-        jdbc.queryForObject(
-            "SELECT COUNT(*) FROM system_config WHERE config_key = ?",
-            Integer.class,
-            KEY_PERFORMANCE_CALIBRATION_ASSIGNEE_IDS);
-    if (exists != null && exists > 0) {
-      jdbc.update(
-          "UPDATE system_config SET config_value = ? WHERE config_key = ?",
-          json,
-          KEY_PERFORMANCE_CALIBRATION_ASSIGNEE_IDS);
-    } else {
-      jdbc.update(
-          "INSERT INTO system_config (config_key, config_value) VALUES (?, ?)",
-          KEY_PERFORMANCE_CALIBRATION_ASSIGNEE_IDS,
-          json);
-    }
   }
 
   private static String jsonNodeForLog(JsonNode node, int maxLen) {
@@ -396,26 +295,17 @@ public class EmployeeService {
         managerIds.add(String.valueOf(did));
       }
     }
-    Map<String, String> managerNameMap = new HashMap<String, String>();
-    if (!managerIds.isEmpty()) {
-      List<String> mids = new ArrayList<String>(managerIds);
-      String placeholders = String.join(",", Collections.nCopies(mids.size(), "?"));
-      jdbc.query(
-          "SELECT employee_id, name FROM employee_hierarchy WHERE employee_id IN (" + placeholders + ")",
-          mids.toArray(),
-          (org.springframework.jdbc.core.RowCallbackHandler)
-              rs -> managerNameMap.put(rs.getString("employee_id"), rs.getString("name")));
-    }
+    Map<String, String> managerNameMap = buildManagerNameLookup(managerIds);
     for (Map<String, Object> row : rows) {
       Object mid = row.get("managerId");
       if (mid != null) {
-        String id = String.valueOf(mid);
-        row.put("managerName", managerNameMap.containsKey(id) ? managerNameMap.get(id) : id);
+        String id = String.valueOf(mid).trim();
+        row.put("managerName", sanitizePersonDisplayName(managerNameMap.get(id), id));
       }
       Object did = row.get("dottedManagerId");
       if (did != null) {
-        String id = String.valueOf(did);
-        row.put("dottedManagerName", managerNameMap.containsKey(id) ? managerNameMap.get(id) : id);
+        String id = String.valueOf(did).trim();
+        row.put("dottedManagerName", sanitizePersonDisplayName(managerNameMap.get(id), id));
       }
     }
     enrichItemsWithRoles(rows);
@@ -423,6 +313,94 @@ public class EmployeeService {
     out.put("items", rows);
     out.put("total", total == null ? 0 : total);
     return out;
+  }
+
+  /** 按 employee_id 与 feishu_open_id 解析上级/虚线上级姓名（未命中不返回 open_id 占位）。 */
+  private Map<String, String> buildManagerNameLookup(Set<String> managerIds) {
+    Map<String, String> managerNameMap = new HashMap<String, String>();
+    if (managerIds == null || managerIds.isEmpty()) {
+      return managerNameMap;
+    }
+    List<String> mids = new ArrayList<String>();
+    for (String id : managerIds) {
+      if (id != null && !id.trim().isEmpty()) {
+        mids.add(id.trim());
+      }
+    }
+    if (mids.isEmpty()) {
+      return managerNameMap;
+    }
+    String placeholders = String.join(",", Collections.nCopies(mids.size(), "?"));
+    List<Object> args = new ArrayList<Object>();
+    args.addAll(mids);
+    args.addAll(mids);
+    jdbc.query(
+        "SELECT employee_id, feishu_open_id, name FROM employee_hierarchy WHERE employee_id IN ("
+            + placeholders
+            + ") OR feishu_open_id IN ("
+            + placeholders
+            + ")",
+        args.toArray(),
+        (org.springframework.jdbc.core.RowCallbackHandler)
+            rs -> {
+              String name = rs.getString("name");
+              if (name == null || name.trim().isEmpty()) {
+                return;
+              }
+              String trimmedName = name.trim();
+              if (looksLikeFeishuOpenId(trimmedName)) {
+                return;
+              }
+              String employeeId = rs.getString("employee_id");
+              if (employeeId != null && !employeeId.trim().isEmpty()) {
+                managerNameMap.put(employeeId.trim(), trimmedName);
+              }
+              String openId = rs.getString("feishu_open_id");
+              if (openId != null && !openId.trim().isEmpty()) {
+                managerNameMap.put(openId.trim(), trimmedName);
+              }
+            });
+    return managerNameMap;
+  }
+
+  /** 不把 open_id 或纯 ID 当作展示姓名。 */
+  private static String sanitizePersonDisplayName(String name, String id) {
+    if (name == null || name.trim().isEmpty()) {
+      return null;
+    }
+    String n = name.trim();
+    if (looksLikeFeishuOpenId(n)) {
+      return null;
+    }
+    if (id != null && n.equals(id.trim())) {
+      return null;
+    }
+    return n;
+  }
+
+  /**
+   * 飞书同步后：将 manager_id / dotted_manager_id 规范为同主体内已存在员工的 employee_id，便于列表解析姓名。
+   */
+  private int normalizeManagerIdsInSubject(String subjectId) {
+    int direct =
+        jdbc.update(
+            "UPDATE employee_hierarchy eh "
+                + "INNER JOIN employee_hierarchy mgr ON mgr.feishu_subject_id = eh.feishu_subject_id "
+                + "AND mgr.employee_id <> eh.employee_id "
+                + "AND (mgr.feishu_open_id = eh.manager_id OR mgr.employee_id = eh.manager_id) "
+                + "SET eh.manager_id = mgr.employee_id "
+                + "WHERE eh.feishu_subject_id = ? AND eh.manager_id IS NOT NULL AND TRIM(eh.manager_id) <> ''",
+            subjectId);
+    int dotted =
+        jdbc.update(
+            "UPDATE employee_hierarchy eh "
+                + "INNER JOIN employee_hierarchy mgr ON mgr.feishu_subject_id = eh.feishu_subject_id "
+                + "AND mgr.employee_id <> eh.employee_id "
+                + "AND (mgr.feishu_open_id = eh.dotted_manager_id OR mgr.employee_id = eh.dotted_manager_id) "
+                + "SET eh.dotted_manager_id = mgr.employee_id "
+                + "WHERE eh.feishu_subject_id = ? AND eh.dotted_manager_id IS NOT NULL AND TRIM(eh.dotted_manager_id) <> ''",
+            subjectId);
+    return direct + dotted;
   }
 
   public List<String> getAllDepartments() {
@@ -729,6 +707,41 @@ public class EmployeeService {
     }
   }
 
+  /** 批量更新员工档案中的考核规则；assessmentRuleId 为空字符串时清空绑定。 */
+  public Map<String, Object> batchUpdateAssessmentRule(List<String> employeeIds, String assessmentRuleIdRaw) {
+    List<String> ids = new ArrayList<String>();
+    if (employeeIds != null) {
+      for (String id : employeeIds) {
+        if (id != null && !id.trim().isEmpty() && !ids.contains(id.trim())) {
+          ids.add(id.trim());
+        }
+      }
+    }
+    if (ids.isEmpty()) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择员工");
+    }
+    String rid = assessmentRuleIdRaw == null ? "" : assessmentRuleIdRaw.trim();
+    String ruleId = null;
+    if (!rid.isEmpty()) {
+      assertEnabledAssessmentRuleId(rid);
+      ruleId = rid;
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    List<Object> args = new ArrayList<Object>();
+    args.add(ruleId);
+    args.addAll(ids);
+    int updated =
+        jdbc.update(
+            "UPDATE employee_hierarchy SET assessment_rule_id = ? WHERE employee_id IN ("
+                + placeholders
+                + ")",
+            args.toArray());
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("success", Boolean.TRUE);
+    out.put("updatedCount", updated);
+    return out;
+  }
+
   private Optional<String> resolveFeishuSubjectIdFromBody(Map<String, Object> body) {
     Object sid = body.get("feishuSubjectId");
     if (sid != null && !String.valueOf(sid).trim().isEmpty()) {
@@ -836,13 +849,20 @@ public class EmployeeService {
       return "";
     }
     JsonNode n = userItem.path("employee_no");
-    if (n.isMissingNode() || n.isNull()) {
-      return "";
+    if (!n.isMissingNode() && !n.isNull()) {
+      String raw = n.isNumber() ? n.asText("").trim() : n.asText("").trim();
+      if (!raw.isEmpty()) {
+        return raw;
+      }
     }
-    if (n.isNumber()) {
-      return n.asText("").trim();
+    JsonNode jobNo = userItem.path("job_number");
+    if (!jobNo.isMissingNode() && !jobNo.isNull()) {
+      String raw = jobNo.asText("").trim();
+      if (!raw.isEmpty()) {
+        return raw;
+      }
     }
-    return n.asText("").trim();
+    return "";
   }
 
   /**
@@ -883,15 +903,10 @@ public class EmployeeService {
     return departments;
   }
 
-  private List<Map<String, Object>> fetchLarkContactUsers(String appId, String appSecret) throws Exception {
-    String tenantToken = fetchTenantAccessToken(appId, appSecret);
-    List<JsonNode> departments = fetchAllDepartmentNodes(tenantToken);
+  private static Map<String, String> buildDeptOpenIdToName(List<JsonNode> departments) {
     Map<String, String> deptOpenIdToName = new LinkedHashMap<String, String>();
     for (JsonNode d : departments) {
-      String oid = d.path("open_department_id").asText("").trim();
-      if (oid.isEmpty()) {
-        oid = d.path("department_id").asText("").trim();
-      }
+      String oid = departmentOpenId(d);
       if (oid.isEmpty()) {
         continue;
       }
@@ -900,84 +915,251 @@ public class EmployeeService {
         deptOpenIdToName.put(oid, nm);
       }
     }
+    return deptOpenIdToName;
+  }
+
+  private static String departmentOpenId(JsonNode dept) {
+    if (dept == null || dept.isMissingNode()) {
+      return "";
+    }
+    String oid = dept.path("open_department_id").asText("").trim();
+    if (oid.isEmpty()) {
+      oid = dept.path("department_id").asText("").trim();
+    }
+    return oid;
+  }
+
+  /** 顶层部门 open_department_id（用于 find_by_department + fetch_child 拉全员）。 */
+  private static List<String> resolveRootOpenDepartmentIds(List<JsonNode> departments) {
+    Set<String> allOpenIds = new HashSet<String>();
+    for (JsonNode d : departments) {
+      String oid = departmentOpenId(d);
+      if (!oid.isEmpty()) {
+        allOpenIds.add(oid);
+      }
+    }
+    List<String> roots = new ArrayList<String>();
+    for (JsonNode d : departments) {
+      String oid = departmentOpenId(d);
+      if (oid.isEmpty()) {
+        continue;
+      }
+      String parent = d.path("parent_department_id").asText("").trim();
+      if (parent.isEmpty() || "0".equals(parent) || !allOpenIds.contains(parent)) {
+        roots.add(oid);
+      }
+    }
+    if (roots.isEmpty() && !departments.isEmpty()) {
+      String oid = departmentOpenId(departments.get(0));
+      if (!oid.isEmpty()) {
+        roots.add(oid);
+      }
+    }
+    return roots;
+  }
+
+  private void appendUsersFromContactResponse(
+      JsonNode items,
+      String fallbackDeptId,
+      Map<String, String> deptOpenIdToName,
+      JsonNode fallbackDeptNode,
+      Set<String> userIdSet,
+      List<Map<String, Object>> allUsers) {
+    if (items == null || !items.isArray()) {
+      return;
+    }
+    for (JsonNode item : items) {
+      String uid = item.path("open_id").asText("");
+      if (uid.isEmpty()) {
+        uid = item.path("user_id").asText("");
+      }
+      if (uid.isEmpty() || userIdSet.contains(uid)) {
+        continue;
+      }
+      userIdSet.add(uid);
+      Map<String, Object> u = new LinkedHashMap<String, Object>();
+      u.put("userId", uid);
+      u.put("name", item.path("name").asText(""));
+      u.put("employeeNo", userEmployeeNoText(item));
+      u.put("leaderUserId", item.path("leader_user_id").asText(null));
+      JsonNode dottedLeaders = item.path("dotted_line_leader_user_ids");
+      if (dottedLeaders.isArray() && dottedLeaders.size() > 0) {
+        u.put("dottedLeaderUserId", dottedLeaders.get(0).asText(null));
+      }
+      JsonNode deptIds = item.path("department_ids");
+      if (deptIds.isArray() && deptIds.size() > 0) {
+        u.put("departmentId", deptIds.get(0).asText(""));
+      }
+      String deptLabel = userDepartmentNameFromItem(item);
+      if (deptLabel.isEmpty() && fallbackDeptNode != null) {
+        deptLabel = departmentNodeDisplayName(fallbackDeptNode);
+      }
+      if (deptLabel.isEmpty()) {
+        deptLabel = deptOpenIdToName.getOrDefault(fallbackDeptId, "");
+      }
+      if (deptLabel.isEmpty() && deptIds.isArray()) {
+        for (JsonNode idNode : deptIds) {
+          String did = idNode.asText("").trim();
+          if (did.isEmpty()) {
+            continue;
+          }
+          deptLabel = deptOpenIdToName.getOrDefault(did, "");
+          if (!deptLabel.isEmpty()) {
+            break;
+          }
+        }
+      }
+      u.put("departmentName", deptLabel);
+      allUsers.add(u);
+    }
+  }
+
+  /**
+   * 按部门拉用户；{@code fetchChild=true} 时含子部门成员（用于根部门拉全员）。
+   */
+  private void fetchUsersFindByDepartment(
+      String tenantToken,
+      String deptId,
+      String departmentIdType,
+      boolean fetchChild,
+      Map<String, String> deptOpenIdToName,
+      JsonNode fallbackDeptNode,
+      Set<String> userIdSet,
+      List<Map<String, Object>> allUsers)
+      throws Exception {
+    String pageToken = null;
+    do {
+      StringBuilder url =
+          new StringBuilder(
+              "https://open.feishu.cn/open-apis/contact/v3/users/find_by_department");
+      url.append("?department_id=").append(URLEncoder.encode(deptId, StandardCharsets.UTF_8.name()));
+      url.append("&department_id_type=")
+          .append(URLEncoder.encode(departmentIdType, StandardCharsets.UTF_8.name()));
+      url.append("&page_size=50&user_id_type=open_id");
+      if (fetchChild) {
+        url.append("&fetch_child=true");
+      }
+      if (pageToken != null) {
+        url.append("&page_token=").append(pageToken);
+      }
+      JsonNode res = feishuGet(url.toString(), tenantToken);
+      if (res.path("code").asInt(0) != 0) {
+        throw new Exception(
+            "飞书 find_by_department 失败 dept="
+                + deptId
+                + " fetchChild="
+                + fetchChild
+                + ": "
+                + res.path("msg").asText("")
+                + " (code="
+                + res.path("code").asInt()
+                + ")");
+      }
+      appendUsersFromContactResponse(
+          res.path("data").path("items"),
+          deptId,
+          deptOpenIdToName,
+          fallbackDeptNode,
+          userIdSet,
+          allUsers);
+      pageToken = res.path("data").path("page_token").asText(null);
+      if (pageToken != null && pageToken.isEmpty()) {
+        pageToken = null;
+      }
+    } while (pageToken != null);
+  }
+
+  /** 按部门拉「直属」成员（与历史 sync-from-lark 一致）。 */
+  private void fetchUsersByDepartmentDirect(
+      String tenantToken,
+      String deptId,
+      JsonNode deptNode,
+      Map<String, String> deptOpenIdToName,
+      Set<String> userIdSet,
+      List<Map<String, Object>> allUsers)
+      throws Exception {
+    String pageToken = null;
+    do {
+      StringBuilder url =
+          new StringBuilder("https://open.feishu.cn/open-apis/contact/v3/users?department_id=");
+      url.append(URLEncoder.encode(deptId, StandardCharsets.UTF_8.name()));
+      url.append("&page_size=50&user_id_type=open_id&department_id_type=open_department_id");
+      if (pageToken != null) {
+        url.append("&page_token=").append(pageToken);
+      }
+      JsonNode res = feishuGet(url.toString(), tenantToken);
+      if (res.path("code").asInt(0) != 0) {
+        throw new Exception(
+            "飞书用户列表失败 dept="
+                + deptId
+                + ": "
+                + res.path("msg").asText("")
+                + " (code="
+                + res.path("code").asInt()
+                + ")");
+      }
+      appendUsersFromContactResponse(
+          res.path("data").path("items"), deptId, deptOpenIdToName, deptNode, userIdSet, allUsers);
+      pageToken = res.path("data").path("page_token").asText(null);
+      if (pageToken != null && pageToken.isEmpty()) {
+        pageToken = null;
+      }
+    } while (pageToken != null);
+  }
+
+  private List<Map<String, Object>> fetchLarkContactUsers(String appId, String appSecret) throws Exception {
+    String tenantToken = fetchTenantAccessToken(appId, appSecret);
+    List<JsonNode> departments = fetchAllDepartmentNodes(tenantToken);
+    Map<String, String> deptOpenIdToName = buildDeptOpenIdToName(departments);
     Set<String> userIdSet = new HashSet<String>();
     List<Map<String, Object>> allUsers = new ArrayList<Map<String, Object>>();
+
+    List<String> rootDeptIds = resolveRootOpenDepartmentIds(departments);
+    for (String rootId : rootDeptIds) {
+      try {
+        fetchUsersFindByDepartment(
+            tenantToken,
+            rootId,
+            "open_department_id",
+            true,
+            deptOpenIdToName,
+            null,
+            userIdSet,
+            allUsers);
+      } catch (Exception ex) {
+        log.warn("飞书通讯录根部门 find_by_department 失败 rootDeptId={} appId={} {}", rootId, appId, ex.getMessage());
+      }
+    }
+
     int deptLimit = Math.min(departments.size(), MAX_DEPARTMENTS_FOR_USER_SCAN);
+    if (departments.size() > deptLimit) {
+      log.warn(
+          "飞书通讯录部门数 {} 超过扫描上限 {}，将截断按部门拉直属成员 appId={}",
+          departments.size(),
+          deptLimit,
+          appId);
+    }
     for (int i = 0; i < deptLimit; i++) {
       JsonNode dept = departments.get(i);
-      String deptId = dept.path("open_department_id").asText("").trim();
-      if (deptId.isEmpty()) {
-        deptId = dept.path("department_id").asText("").trim();
-      }
+      String deptId = departmentOpenId(dept);
       if (deptId.isEmpty()) {
         continue;
       }
-      String pageToken = null;
-      do {
-        StringBuilder url =
-            new StringBuilder("https://open.feishu.cn/open-apis/contact/v3/users?department_id=");
-        url.append(URLEncoder.encode(deptId, StandardCharsets.UTF_8.name()));
-        url.append("&page_size=50&user_id_type=open_id&department_id_type=open_department_id");
-        if (pageToken != null) {
-          url.append("&page_token=").append(pageToken);
-        }
-        JsonNode res = feishuGet(url.toString(), tenantToken);
-        if (res.path("code").asInt(0) != 0) {
-          throw new Exception(
-              "飞书用户列表失败 dept="
-                  + deptId
-                  + ": "
-                  + res.path("msg").asText("")
-                  + " (code="
-                  + res.path("code").asInt()
-                  + ")");
-        }
-        JsonNode items = res.path("data").path("items");
-        if (items.isArray()) {
-          for (JsonNode item : items) {
-            String uid = item.path("open_id").asText("");
-            if (uid.isEmpty()) {
-              uid = item.path("user_id").asText("");
-            }
-            if (uid.isEmpty() || userIdSet.contains(uid)) {
-              continue;
-            }
-            userIdSet.add(uid);
-            Map<String, Object> u = new LinkedHashMap<String, Object>();
-            u.put("userId", uid);
-            u.put("name", item.path("name").asText(""));
-            u.put("employeeNo", userEmployeeNoText(item));
-            u.put("leaderUserId", item.path("leader_user_id").asText(null));
-            JsonNode deptIds = item.path("department_ids");
-            if (deptIds.isArray() && deptIds.size() > 0) {
-              u.put("departmentId", deptIds.get(0).asText(""));
-            }
-            String deptLabel = userDepartmentNameFromItem(item);
-            if (deptLabel.isEmpty()) {
-              deptLabel = deptOpenIdToName.getOrDefault(deptId, departmentNodeDisplayName(dept));
-            }
-            if (deptLabel.isEmpty() && deptIds.isArray()) {
-              for (JsonNode idNode : deptIds) {
-                String did = idNode.asText("").trim();
-                if (did.isEmpty()) {
-                  continue;
-                }
-                deptLabel = deptOpenIdToName.getOrDefault(did, "");
-                if (!deptLabel.isEmpty()) {
-                  break;
-                }
-              }
-            }
-            u.put("departmentName", deptLabel);
-            allUsers.add(u);
-          }
-        }
-        pageToken = res.path("data").path("page_token").asText(null);
-        if (pageToken != null && pageToken.isEmpty()) {
-          pageToken = null;
-        }
-      } while (pageToken != null);
+      try {
+        fetchUsersByDepartmentDirect(
+            tenantToken, deptId, dept, deptOpenIdToName, userIdSet, allUsers);
+      } catch (Exception ex) {
+        log.warn("飞书通讯录按部门拉直属成员失败 deptId={} appId={} {}", deptId, appId, ex.getMessage());
+      }
     }
+
+    log.info(
+        "fetchLarkContactUsers appId={} deptCount={} deptScanned={} rootDeptCount={} userCount={}",
+        appId,
+        departments.size(),
+        deptLimit,
+        rootDeptIds.size(),
+        allUsers.size());
     Collections.sort(
         allUsers,
         (a, b) ->
@@ -1159,6 +1341,631 @@ public class EmployeeService {
     }
   }
 
+  /** 可执行通讯录同步的已启用主体（含登录应用凭证）。 */
+  public List<Map<String, Object>> listSyncableSubjects() {
+    return jdbc.query(
+        "SELECT s.code, s.name FROM feishu_subject s "
+            + "WHERE s.enabled = 1 AND EXISTS ("
+            + "SELECT 1 FROM feishu_app a WHERE a.feishu_subject_id = s.id AND a.enabled = 1 AND a.is_login_app = 1 "
+            + "AND TRIM(a.app_id) <> '' AND TRIM(a.app_secret) <> '') "
+            + "ORDER BY s.sort_order ASC, s.code ASC",
+        (rs, rn) -> {
+          Map<String, Object> m = new LinkedHashMap<String, Object>();
+          m.put("code", rs.getString("code"));
+          m.put("name", rs.getString("name"));
+          return m;
+        });
+  }
+
+  /**
+   * 按主体从飞书通讯录 upsert 员工（新增 + 更新）。多主体请用 {@link #syncAllSubjectsFromFeishu}。
+   */
+  public Map<String, Object> syncSubjectFromFeishu(String subjectCode) {
+    String trimmedCode = subjectCode == null ? "" : subjectCode.trim();
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("subjectCode", trimmedCode);
+    out.put("createdCount", 0);
+    out.put("updatedCount", 0);
+    out.put("failedCount", 0);
+    out.put("deletedCount", 0);
+    out.put("reconciledManagerCount", 0);
+    out.put("totalCount", 0);
+    out.put("createdNames", new ArrayList<String>());
+    if (trimmedCode.isEmpty()) {
+      out.put("success", Boolean.FALSE);
+      out.put("message", "缺少 subjectCode");
+      return out;
+    }
+    String subjectId;
+    try {
+      subjectId =
+          feishuRegistry
+              .findSubjectIdByCode(trimmedCode)
+              .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "飞书主体不存在或已停用"));
+    } catch (ResponseStatusException e) {
+      out.put("success", Boolean.FALSE);
+      out.put("message", e.getReason());
+      return out;
+    }
+    List<String> names =
+        jdbc.query(
+            "SELECT name FROM feishu_subject WHERE id = ? LIMIT 1",
+            (rs, rn) -> rs.getString(1),
+            subjectId);
+    out.put("subjectName", names.isEmpty() ? trimmedCode : names.get(0));
+    FeishuRegistryService.FeishuImAppRow app;
+    try {
+      app =
+          feishuRegistry
+              .findDirectoryAppForSubjectId(subjectId)
+              .orElseThrow(
+                  () -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "该主体未配置通讯录用飞书应用"));
+    } catch (ResponseStatusException e) {
+      out.put("success", Boolean.FALSE);
+      out.put("message", e.getReason());
+      return out;
+    }
+    try {
+      String tenantToken = fetchTenantAccessToken(app.getAppId(), app.getAppSecret());
+      List<Map<String, Object>> allUsers = fetchLarkContactUsers(app.getAppId(), app.getAppSecret());
+      out.put("totalCount", allUsers.size());
+      out.put("skippedNoSeatCount", 0);
+      if (allUsers.isEmpty()) {
+        out.put("deletedCount", 0);
+        out.put("reconciledManagerCount", 0);
+        out.put("success", Boolean.TRUE);
+        return out;
+      }
+      log.info(
+          "{} syncSubjectFromFeishu 开始 subjectCode={} directoryAppId={}",
+          FEISHU_SYNC_TRACE,
+          trimmedCode,
+          app.getAppId());
+      List<JsonNode> departments = fetchAllDepartmentNodes(tenantToken);
+      DirectorySeatScanStats seatStats = new DirectorySeatScanStats();
+      Set<String> seatedOpenIds =
+          fetchOpenIdsWithAssignedSeat(tenantToken, departments, seatStats);
+      out.put("seatAssignedCount", seatedOpenIds.size());
+      int contactInSeat = 0;
+      for (Map<String, Object> user : allUsers) {
+        String oid = String.valueOf(user.get("userId")).trim();
+        if (!oid.isEmpty() && seatedOpenIds.contains(oid)) {
+          contactInSeat++;
+        }
+      }
+      log.info(
+          "{} syncSubjectFromFeishu 通讯录与席位 subjectCode={} contactCount={} deptCount={} seatAssignedOpenIdCount={} contactInSeatCount={} directoryEmployeeRows={} dirWithSeat={} dirEmptySubscriptionIds={} dirMissingSubscriptionField={} deptApiCalls={} deptApiErrors={}",
+          FEISHU_SYNC_TRACE,
+          trimmedCode,
+          allUsers.size(),
+          departments.size(),
+          seatedOpenIds.size(),
+          contactInSeat,
+          seatStats.employeeRows,
+          seatStats.withSeat,
+          seatStats.emptySubscriptionIds,
+          seatStats.missingSubscriptionField,
+          seatStats.deptApiCalls,
+          seatStats.deptApiErrors);
+      if (seatStats.deptApiErrors > 0 && seatStats.firstErrorSnippet != null) {
+        log.warn(
+            "{} syncSubjectFromFeishu Directory 部分部门请求失败 subjectCode={} firstError={}",
+            FEISHU_SYNC_TRACE,
+            trimmedCode,
+            seatStats.firstErrorSnippet);
+      }
+      if (seatStats.employeeRows > 0 && seatStats.withSeat == 0) {
+        log.warn(
+            "{} syncSubjectFromFeishu Directory 返回了 {} 条员工但 subscription_ids 均空；请确认应用已开通并生效 directory:employee.base.subscription_ids:read，且重新发布/授权后重试。样例={}",
+            FEISHU_SYNC_TRACE,
+            seatStats.employeeRows,
+            seatStats.sampleEmployeeSnippet);
+      }
+      if (seatedOpenIds.size() > 0 && seatedOpenIds.size() <= 8) {
+        log.info(
+            "{} syncSubjectFromFeishu 有席位 open_id 列表 subjectCode={} ids={}",
+            FEISHU_SYNC_TRACE,
+            trimmedCode,
+            seatedOpenIds);
+      }
+      SubjectEmployeeIndex index = loadSubjectEmployeeIndex(subjectId);
+      int created = 0;
+      int updated = 0;
+      int failed = 0;
+      int skippedNoSeat = 0;
+      List<String> createdNames = new ArrayList<String>();
+      List<String> skippedNoSeatSamples = new ArrayList<String>();
+      for (Map<String, Object> user : allUsers) {
+        String openId = String.valueOf(user.get("userId")).trim();
+        if (openId.isEmpty()) {
+          failed++;
+          continue;
+        }
+        try {
+          if (!seatedOpenIds.contains(openId)) {
+            skippedNoSeat++;
+            if (skippedNoSeatSamples.size() < 8) {
+              skippedNoSeatSamples.add(
+                  displayNameFromFeishuUser(user, openId) + "(" + openId + ")");
+            }
+            continue;
+          }
+          if (nullableString(user.get("employeeNo")) == null) {
+            enrichUserFromFeishuDetail(tenantToken, openId, user);
+          }
+          String existingEmployeeId = resolveExistingEmployeeId(index, openId, user.get("name"));
+          if (existingEmployeeId == null) {
+            insertEmployeeFromFeishuContact(subjectId, openId, user);
+            registerEmployeeInIndex(index, openId, openId, user.get("name"));
+            created++;
+            createdNames.add(displayNameFromFeishuUser(user, openId));
+          } else {
+            updateEmployeeFromFeishuContact(subjectId, existingEmployeeId, openId, user);
+            registerEmployeeInIndex(index, openId, existingEmployeeId, user.get("name"));
+            updated++;
+          }
+        } catch (Exception ex) {
+          failed++;
+          log.warn(
+              "syncSubjectFromFeishu 单条失败 subjectCode={} openId={} name={}",
+              trimmedCode,
+              openId,
+              user.get("name"),
+              ex);
+        }
+      }
+      int deleted = dedupeDuplicateNamesInSubject(subjectId);
+      int reconciledManagers = normalizeManagerIdsInSubject(subjectId);
+      if (skippedNoSeat > 0) {
+        log.info(
+            "{} syncSubjectFromFeishu 无席位跳过样例 subjectCode={} count={} samples={}",
+            FEISHU_SYNC_TRACE,
+            trimmedCode,
+            skippedNoSeat,
+            skippedNoSeatSamples);
+      }
+      log.info(
+          "syncSubjectFromFeishu 完成 subjectCode={} created={} updated={} skippedNoSeat={} deleted={} reconciledManagers={}",
+          trimmedCode,
+          created,
+          updated,
+          skippedNoSeat,
+          deleted,
+          reconciledManagers);
+      out.put("createdCount", created);
+      out.put("createdNames", createdNames);
+      out.put("updatedCount", updated);
+      out.put("failedCount", failed);
+      out.put("skippedNoSeatCount", skippedNoSeat);
+      out.put("deletedCount", deleted);
+      out.put("reconciledManagerCount", reconciledManagers);
+      out.put("success", Boolean.TRUE);
+      return out;
+    } catch (ResponseStatusException e) {
+      out.put("success", Boolean.FALSE);
+      out.put("message", e.getReason());
+      return out;
+    } catch (Exception e) {
+      log.error("syncSubjectFromFeishu 失败 subjectCode={}", trimmedCode, e);
+      out.put("success", Boolean.FALSE);
+      out.put("message", e.getMessage() != null ? e.getMessage() : "飞书通讯录同步失败");
+      return out;
+    }
+  }
+
+  /** 同步一个或多个主体；未指定时同步全部可同步主体。 */
+  public Map<String, Object> syncAllSubjectsFromFeishu(List<String> subjectCodes) {
+    List<String> codes = new ArrayList<String>();
+    if (subjectCodes == null || subjectCodes.isEmpty()) {
+      for (Map<String, Object> row : listSyncableSubjects()) {
+        codes.add(String.valueOf(row.get("code")));
+      }
+    } else {
+      for (String c : subjectCodes) {
+        if (c != null && !c.trim().isEmpty()) {
+          codes.add(c.trim());
+        }
+      }
+    }
+    if (codes.isEmpty()) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "无可同步的飞书主体");
+    }
+    int totalCreated = 0;
+    int totalUpdated = 0;
+    int totalFailed = 0;
+    int totalSkippedNoSeat = 0;
+    int totalDeleted = 0;
+    List<String> allCreatedNames = new ArrayList<String>();
+    List<Map<String, Object>> subjectResults = new ArrayList<Map<String, Object>>();
+    boolean allSuccess = true;
+    StringBuilder errMsg = new StringBuilder();
+    for (String code : codes) {
+      Map<String, Object> one = syncSubjectFromFeishu(code);
+      subjectResults.add(one);
+      if (!Boolean.TRUE.equals(one.get("success"))) {
+        allSuccess = false;
+        if (errMsg.length() > 0) {
+          errMsg.append("; ");
+        }
+        errMsg.append(code).append(": ").append(one.get("message"));
+      } else {
+        totalCreated += intValue(one.get("createdCount"));
+        totalUpdated += intValue(one.get("updatedCount"));
+        totalFailed += intValue(one.get("failedCount"));
+        totalSkippedNoSeat += intValue(one.get("skippedNoSeatCount"));
+        totalDeleted += intValue(one.get("deletedCount"));
+        Object namesObj = one.get("createdNames");
+        if (namesObj instanceof List) {
+          for (Object n : (List<?>) namesObj) {
+            if (n != null && !String.valueOf(n).trim().isEmpty()) {
+              allCreatedNames.add(String.valueOf(n).trim());
+            }
+          }
+        }
+      }
+    }
+    Map<String, Object> out = new LinkedHashMap<String, Object>();
+    out.put("success", allSuccess);
+    out.put("createdCount", totalCreated);
+    out.put("createdNames", allCreatedNames);
+    out.put("updatedCount", totalUpdated);
+    out.put("failedCount", totalFailed);
+    out.put("skippedNoSeatCount", totalSkippedNoSeat);
+    out.put("deletedCount", totalDeleted);
+    out.put("subjects", subjectResults);
+    if (!allSuccess) {
+      out.put("message", errMsg.toString());
+    }
+    return out;
+  }
+
+  private static String displayNameFromFeishuUser(Map<String, Object> user, String openId) {
+    String name = nullableString(user.get("name"));
+    if (name != null && !name.isEmpty()) {
+      return name;
+    }
+    String employeeNo = nullableString(user.get("employeeNo"));
+    if (employeeNo != null && !employeeNo.isEmpty()) {
+      return employeeNo;
+    }
+    return openId == null ? "" : openId;
+  }
+
+  private static int intValue(Object v) {
+    if (v == null) {
+      return 0;
+    }
+    if (v instanceof Number) {
+      return ((Number) v).intValue();
+    }
+    try {
+      return Integer.parseInt(String.valueOf(v));
+    } catch (NumberFormatException e) {
+      return 0;
+    }
+  }
+
+  private static final class SubjectEmployeeIndex {
+    final Map<String, String> openIdToEmployeeId = new HashMap<String, String>();
+    final Map<String, List<String>> nameToEmployeeIds = new HashMap<String, List<String>>();
+  }
+
+  private static String normalizeEmployeeName(Object name) {
+    if (name == null) {
+      return "";
+    }
+    return String.valueOf(name).trim();
+  }
+
+  private static boolean looksLikeFeishuOpenId(String id) {
+    if (id == null) {
+      return false;
+    }
+    String s = id.trim();
+    return s.startsWith("ou_") || s.startsWith("on_");
+  }
+
+  private SubjectEmployeeIndex loadSubjectEmployeeIndex(String subjectId) {
+    SubjectEmployeeIndex index = new SubjectEmployeeIndex();
+    jdbc.query(
+        "SELECT employee_id, feishu_open_id, name FROM employee_hierarchy WHERE feishu_subject_id = ?",
+        new Object[] {subjectId},
+        (org.springframework.jdbc.core.RowCallbackHandler)
+            rs -> {
+              String employeeId = rs.getString("employee_id");
+              if (employeeId == null || employeeId.trim().isEmpty()) {
+                return;
+              }
+              String eid = employeeId.trim();
+              String openId = rs.getString("feishu_open_id");
+              if (openId != null && !openId.trim().isEmpty()) {
+                index.openIdToEmployeeId.put(openId.trim(), eid);
+              }
+              index.openIdToEmployeeId.put(eid, eid);
+              String nameKey = normalizeEmployeeName(rs.getString("name"));
+              if (!nameKey.isEmpty()) {
+                List<String> list = index.nameToEmployeeIds.get(nameKey);
+                if (list == null) {
+                  list = new ArrayList<String>();
+                  index.nameToEmployeeIds.put(nameKey, list);
+                }
+                if (!list.contains(eid)) {
+                  list.add(eid);
+                }
+              }
+            });
+    return index;
+  }
+
+  private void registerEmployeeInIndex(
+      SubjectEmployeeIndex index, String openId, String employeeId, Object name) {
+    String eid = employeeId == null ? "" : employeeId.trim();
+    if (eid.isEmpty()) {
+      return;
+    }
+    if (openId != null && !openId.trim().isEmpty()) {
+      index.openIdToEmployeeId.put(openId.trim(), eid);
+    }
+    index.openIdToEmployeeId.put(eid, eid);
+    String nameKey = normalizeEmployeeName(name);
+    if (!nameKey.isEmpty()) {
+      List<String> list = index.nameToEmployeeIds.get(nameKey);
+      if (list == null) {
+        list = new ArrayList<String>();
+        index.nameToEmployeeIds.put(nameKey, list);
+      }
+      if (!list.contains(eid)) {
+        list.add(eid);
+      }
+    }
+  }
+
+  private String resolveExistingEmployeeId(
+      SubjectEmployeeIndex index, String openId, Object name) {
+    String byOpen = index.openIdToEmployeeId.get(openId);
+    if (byOpen != null) {
+      return byOpen;
+    }
+    String nameKey = normalizeEmployeeName(name);
+    if (nameKey.isEmpty()) {
+      return null;
+    }
+    List<String> ids = index.nameToEmployeeIds.get(nameKey);
+    if (ids == null || ids.isEmpty()) {
+      return null;
+    }
+    if (ids.size() == 1) {
+      return ids.get(0);
+    }
+    return pickKeeperEmployeeId(ids);
+  }
+
+  private String pickKeeperEmployeeId(List<String> employeeIds) {
+    if (employeeIds == null || employeeIds.isEmpty()) {
+      return null;
+    }
+    if (employeeIds.size() == 1) {
+      return employeeIds.get(0);
+    }
+    String bestId = employeeIds.get(0);
+    int bestScore = -1;
+    for (String eid : employeeIds) {
+      List<Map<String, Object>> rows =
+          jdbc.query(
+              "SELECT employee_id, employee_no, feishu_open_id, phone FROM employee_hierarchy WHERE employee_id = ? LIMIT 1",
+              new Object[] {eid},
+              (rs, rn) -> {
+                Map<String, Object> m = new LinkedHashMap<String, Object>();
+                m.put("employeeId", rs.getString("employee_id"));
+                m.put("employeeNo", rs.getString("employee_no"));
+                m.put("feishuOpenId", rs.getString("feishu_open_id"));
+                m.put("phone", rs.getString("phone"));
+                return m;
+              });
+      if (rows.isEmpty()) {
+        continue;
+      }
+      int score = scoreKeeperRow(rows.get(0));
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = eid;
+      }
+    }
+    return bestId;
+  }
+
+  private static int scoreKeeperRow(Map<String, Object> row) {
+    int score = 0;
+    String employeeId = String.valueOf(row.get("employeeId"));
+    String employeeNo = row.get("employeeNo") == null ? "" : String.valueOf(row.get("employeeNo")).trim();
+    String feishuOpenId =
+        row.get("feishuOpenId") == null ? "" : String.valueOf(row.get("feishuOpenId")).trim();
+    String phone = row.get("phone") == null ? "" : String.valueOf(row.get("phone")).trim();
+    if (!employeeNo.isEmpty() && !looksLikeFeishuOpenId(employeeNo)) {
+      score += 100;
+    }
+    if (!feishuOpenId.isEmpty()) {
+      score += 20;
+    }
+    if (!phone.isEmpty()) {
+      score += 10;
+    }
+    if (!looksLikeFeishuOpenId(employeeId)) {
+      score += 50;
+    }
+    return score;
+  }
+
+  private int dedupeDuplicateNamesInSubject(String subjectId) {
+    List<Map<String, Object>> rows =
+        jdbc.query(
+            "SELECT employee_id, name, employee_no, feishu_open_id, phone FROM employee_hierarchy WHERE feishu_subject_id = ?",
+            new Object[] {subjectId},
+            (rs, rn) -> {
+              Map<String, Object> m = new LinkedHashMap<String, Object>();
+              m.put("employeeId", rs.getString("employee_id"));
+              m.put("name", rs.getString("name"));
+              m.put("employeeNo", rs.getString("employee_no"));
+              m.put("feishuOpenId", rs.getString("feishu_open_id"));
+              m.put("phone", rs.getString("phone"));
+              return m;
+            });
+    Map<String, List<Map<String, Object>>> byName = new LinkedHashMap<String, List<Map<String, Object>>>();
+    for (Map<String, Object> row : rows) {
+      String nameKey = normalizeEmployeeName(row.get("name"));
+      if (nameKey.isEmpty()) {
+        continue;
+      }
+      List<Map<String, Object>> group = byName.get(nameKey);
+      if (group == null) {
+        group = new ArrayList<Map<String, Object>>();
+        byName.put(nameKey, group);
+      }
+      group.add(row);
+    }
+    int deleted = 0;
+    for (List<Map<String, Object>> group : byName.values()) {
+      if (group.size() <= 1) {
+        continue;
+      }
+      List<String> ids = new ArrayList<String>();
+      for (Map<String, Object> row : group) {
+        ids.add(String.valueOf(row.get("employeeId")));
+      }
+      String keeperId = pickKeeperEmployeeId(ids);
+      for (Map<String, Object> row : group) {
+        String eid = String.valueOf(row.get("employeeId"));
+        if (keeperId != null && !keeperId.equals(eid)) {
+          deleteEmployee(eid);
+          deleted++;
+          log.info(
+              "dedupeDuplicateNamesInSubject 删除重复员工 subjectId={} name={} deletedEmployeeId={} keeperEmployeeId={}",
+              subjectId,
+              row.get("name"),
+              eid,
+              keeperId);
+        }
+      }
+    }
+    return deleted;
+  }
+
+  private void enrichUserFromFeishuDetail(String tenantToken, String openId, Map<String, Object> user)
+      throws Exception {
+    String url =
+        "https://open.feishu.cn/open-apis/contact/v3/users/"
+            + URLEncoder.encode(openId, StandardCharsets.UTF_8.name())
+            + "?user_id_type=open_id&department_id_type=open_department_id";
+    JsonNode res = feishuGet(url, tenantToken);
+    if (res.path("code").asInt(0) != 0) {
+      return;
+    }
+    JsonNode item = res.path("data").path("user");
+    String empNo = userEmployeeNoText(item);
+    if (!empNo.isEmpty()) {
+      user.put("employeeNo", empNo);
+    }
+    String mobile = item.path("mobile").asText("").trim();
+    if (!mobile.isEmpty()) {
+      user.put("phone", mobile);
+    }
+    if (nullableString(user.get("departmentName")) == null) {
+      String deptName = userDepartmentNameFromItem(item);
+      if (!deptName.isEmpty()) {
+        user.put("departmentName", deptName);
+      }
+    }
+    JsonNode deptIds = item.path("department_ids");
+    if (!user.containsKey("departmentId") && deptIds.isArray() && deptIds.size() > 0) {
+      user.put("departmentId", deptIds.get(0).asText(""));
+    }
+    if (user.get("leaderUserId") == null || String.valueOf(user.get("leaderUserId")).trim().isEmpty()) {
+      String leader = item.path("leader_user_id").asText("").trim();
+      if (!leader.isEmpty()) {
+        user.put("leaderUserId", leader);
+      }
+    }
+    if (user.get("dottedLeaderUserId") == null || String.valueOf(user.get("dottedLeaderUserId")).trim().isEmpty()) {
+      JsonNode dottedLeaders = item.path("dotted_line_leader_user_ids");
+      if (dottedLeaders.isArray() && dottedLeaders.size() > 0) {
+        String dottedLeader = dottedLeaders.get(0).asText("").trim();
+        if (!dottedLeader.isEmpty()) {
+          user.put("dottedLeaderUserId", dottedLeader);
+        }
+      }
+    }
+  }
+
+  private void insertEmployeeFromFeishuContact(
+      String subjectId, String openId, Map<String, Object> user) {
+    jdbc.update(
+        "INSERT INTO employee_hierarchy (id, employee_id, feishu_subject_id, feishu_open_id, manager_id, dotted_manager_id, name, phone, employee_no, department_id, department_name) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        UUID.randomUUID().toString(),
+        openId,
+        subjectId,
+        openId,
+        nullableString(user.get("leaderUserId")),
+        nullableString(user.get("dottedLeaderUserId")),
+        nullableString(user.get("name")),
+        nullableString(user.get("phone")),
+        nullableString(user.get("employeeNo")),
+        nullableString(user.get("departmentId")),
+        nullableString(user.get("departmentName")));
+  }
+
+  private void updateEmployeeFromFeishuContact(
+      String subjectId, String employeeId, String openId, Map<String, Object> user) {
+    List<String> sets = new ArrayList<String>();
+    List<Object> args = new ArrayList<Object>();
+    sets.add("feishu_subject_id = ?");
+    args.add(subjectId);
+    sets.add("feishu_open_id = ?");
+    args.add(openId);
+    sets.add("manager_id = ?");
+    args.add(nullableString(user.get("leaderUserId")));
+    sets.add("dotted_manager_id = ?");
+    args.add(nullableString(user.get("dottedLeaderUserId")));
+    String name = nullableString(user.get("name"));
+    if (name != null) {
+      sets.add("name = ?");
+      args.add(name);
+    }
+    String employeeNo = nullableString(user.get("employeeNo"));
+    if (employeeNo != null) {
+      sets.add("employee_no = ?");
+      args.add(employeeNo);
+    }
+    String phone = nullableString(user.get("phone"));
+    if (phone != null) {
+      sets.add("phone = ?");
+      args.add(phone);
+    }
+    if (user.containsKey("departmentId")) {
+      sets.add("department_id = ?");
+      args.add(nullableString(user.get("departmentId")));
+    }
+    String departmentName = nullableString(user.get("departmentName"));
+    if (departmentName != null) {
+      sets.add("department_name = ?");
+      args.add(departmentName);
+    }
+    sets.add("_updated_at = CURRENT_TIMESTAMP");
+    args.add(employeeId);
+    String sql =
+        "UPDATE employee_hierarchy SET "
+            + String.join(", ", sets)
+            + " WHERE employee_id = ?";
+    jdbc.update(sql, args.toArray());
+  }
+
+  private static String nullableString(Object v) {
+    if (v == null) {
+      return null;
+    }
+    String s = String.valueOf(v).trim();
+    return s.isEmpty() ? null : s;
+  }
+
   public Map<String, Object> syncFromLark(String subjectCode, boolean clearExisting) {
     if (subjectCode == null || subjectCode.trim().isEmpty()) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "缺少 subjectCode");
@@ -1203,12 +2010,13 @@ public class EmployeeService {
         }
         try {
           jdbc.update(
-              "INSERT INTO employee_hierarchy (id, employee_id, feishu_subject_id, feishu_open_id, manager_id, name, department_name) VALUES (?,?,?,?,?,?,?)",
+              "INSERT INTO employee_hierarchy (id, employee_id, feishu_subject_id, feishu_open_id, manager_id, dotted_manager_id, name, department_name) VALUES (?,?,?,?,?,?,?,?)",
               UUID.randomUUID().toString(),
               uid,
               subjectId,
               uid,
               user.get("leaderUserId"),
+              user.get("dottedLeaderUserId"),
               user.get("name"),
               user.get("departmentId"));
           synced++;
@@ -1227,6 +2035,203 @@ public class EmployeeService {
     } catch (Exception e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
     }
+  }
+
+  private static final String DIRECTORY_EMPLOYEES_FILTER_URL =
+      "https://open.feishu.cn/open-apis/directory/v1/employees/filter"
+          + "?employee_id_type=open_id&department_id_type=open_department_id";
+
+  private static final class DirectorySeatScanStats {
+    int deptApiCalls;
+    int deptApiErrors;
+    int employeeRows;
+    int withSeat;
+    int emptySubscriptionIds;
+    int missingSubscriptionField;
+    String firstErrorSnippet;
+    String sampleEmployeeSnippet;
+  }
+
+  /**
+   * 按部门调用 Directory「批量获取员工」，汇总 {@code base_info.subscription_ids} 非空的 open_id（已分配飞书席位）。
+   */
+  private Set<String> fetchOpenIdsWithAssignedSeat(
+      String tenantToken, List<JsonNode> departments, DirectorySeatScanStats stats) throws Exception {
+    Set<String> withSeat = new LinkedHashSet<String>();
+    int deptLimit = Math.min(departments.size(), MAX_DEPARTMENTS_FOR_USER_SCAN);
+    for (int i = 0; i < deptLimit; i++) {
+      String deptId = departmentOpenId(departments.get(i));
+      if (deptId.isEmpty()) {
+        continue;
+      }
+      try {
+        fetchSeatedOpenIdsInDepartment(tenantToken, deptId, withSeat, stats);
+      } catch (Exception ex) {
+        stats.deptApiErrors++;
+        if (stats.firstErrorSnippet == null) {
+          stats.firstErrorSnippet = ex.getMessage();
+        }
+        log.warn(
+            "{} Directory 按部门拉员工失败 deptId={} err={}",
+            FEISHU_SYNC_TRACE,
+            deptId,
+            ex.getMessage());
+      }
+    }
+    log.info(
+        "{} fetchOpenIdsWithAssignedSeat deptScanned={} seatAssignedOpenIdCount={} directoryEmployeeRows={} withSeat={} emptySubscriptionIds={} missingField={}",
+        FEISHU_SYNC_TRACE,
+        deptLimit,
+        withSeat.size(),
+        stats.employeeRows,
+        stats.withSeat,
+        stats.emptySubscriptionIds,
+        stats.missingSubscriptionField);
+    return withSeat;
+  }
+
+  private void fetchSeatedOpenIdsInDepartment(
+      String tenantToken,
+      String departmentOpenId,
+      Set<String> withSeat,
+      DirectorySeatScanStats stats)
+      throws Exception {
+    String pageToken = "";
+    int pageIndex = 0;
+    do {
+      String body = buildDirectoryEmployeesFilterBody(departmentOpenId, pageToken);
+      stats.deptApiCalls++;
+      JsonNode res = feishuPostJson(DIRECTORY_EMPLOYEES_FILTER_URL, body, tenantToken);
+      int code = res.path("code").asInt(-1);
+      if (code != 0) {
+        String snippet = jsonNodeForLog(res, 2000);
+        if (stats.firstErrorSnippet == null) {
+          stats.firstErrorSnippet = "code=" + code + " msg=" + res.path("msg").asText("") + " " + snippet;
+        }
+        log.warn(
+            "{} Directory employees/filter 非0 deptId={} page={} code={} msg={} response={}",
+            FEISHU_SYNC_TRACE,
+            departmentOpenId,
+            pageIndex,
+            code,
+            res.path("msg").asText(""),
+            snippet);
+        throw new ResponseStatusException(
+            HttpStatus.BAD_REQUEST,
+            "飞书 Directory 员工查询失败: "
+                + res.path("msg").asText("")
+                + "（需开通 directory:employee:list 与 directory:employee.base.subscription_ids:read）");
+      }
+      JsonNode data = res.path("data");
+      JsonNode employees = data.path("employees");
+      int pageRows = 0;
+      int pageWithSeat = 0;
+      if (employees.isArray()) {
+        for (JsonNode emp : employees) {
+          pageRows++;
+          stats.employeeRows++;
+          String openId = directoryEmployeeOpenId(emp);
+          int seatState = directoryEmployeeSeatState(emp);
+          if (seatState == 1) {
+            stats.withSeat++;
+            pageWithSeat++;
+            if (!openId.isEmpty()) {
+              withSeat.add(openId);
+            }
+          } else if (seatState == 0) {
+            stats.emptySubscriptionIds++;
+          } else {
+            stats.missingSubscriptionField++;
+          }
+          if (stats.sampleEmployeeSnippet == null && emp != null && !emp.isMissingNode()) {
+            JsonNode base = emp.path("base_info");
+            stats.sampleEmployeeSnippet =
+                "openId="
+                    + openId
+                    + " seatState="
+                    + seatState
+                    + " base_info="
+                    + jsonNodeForLog(base, 800);
+          }
+        }
+      }
+      if (pageIndex == 0 && pageRows > 0 && stats.deptApiCalls == 1) {
+        log.info(
+            "{} Directory employees/filter 首部门首页 deptId={} rows={} withSeatOnPage={}",
+            FEISHU_SYNC_TRACE,
+            departmentOpenId,
+            pageRows,
+            pageWithSeat);
+      }
+      JsonNode page = data.path("page_response");
+      boolean hasMore = page.path("has_more").asBoolean(false);
+      pageToken = page.path("page_token").asText("");
+      pageIndex++;
+      if (!hasMore || pageToken.isEmpty()) {
+        break;
+      }
+    } while (true);
+  }
+
+  private static String buildDirectoryEmployeesFilterBody(String departmentOpenId, String pageToken)
+      throws Exception {
+    Map<String, Object> statusCond = new LinkedHashMap<String, Object>();
+    statusCond.put("field", "work_info.staff_status");
+    statusCond.put("operator", "eq");
+    statusCond.put("value", "1");
+    Map<String, Object> deptCond = new LinkedHashMap<String, Object>();
+    deptCond.put("field", "base_info.departments.department_id");
+    deptCond.put("operator", "eq");
+    deptCond.put("value", "\"" + departmentOpenId + "\"");
+    List<Map<String, Object>> conditions = new ArrayList<Map<String, Object>>();
+    conditions.add(statusCond);
+    conditions.add(deptCond);
+    Map<String, Object> filter = new LinkedHashMap<String, Object>();
+    filter.put("conditions", conditions);
+    List<String> requiredFields = new ArrayList<String>();
+    requiredFields.add("base_info.employee_id");
+    requiredFields.add("base_info.subscription_ids");
+    requiredFields.add("base_info.name");
+    Map<String, Object> pageRequest = new LinkedHashMap<String, Object>();
+    pageRequest.put("page_size", 100);
+    pageRequest.put("page_token", pageToken == null ? "" : pageToken);
+    Map<String, Object> root = new LinkedHashMap<String, Object>();
+    root.put("filter", filter);
+    root.put("required_fields", requiredFields);
+    root.put("page_request", pageRequest);
+    return MAPPER.writeValueAsString(root);
+  }
+
+  private static String directoryEmployeeOpenId(JsonNode emp) {
+    if (emp == null || emp.isMissingNode()) {
+      return "";
+    }
+    String fromBase = emp.path("base_info").path("employee_id").asText("").trim();
+    if (!fromBase.isEmpty()) {
+      return fromBase;
+    }
+    return emp.path("employee_id").asText("").trim();
+  }
+
+  /** @return 1=有席位；0=字段在但为空；2=未返回 subscription_ids 字段（多为缺字段权限） */
+  private static int directoryEmployeeSeatState(JsonNode emp) {
+    JsonNode base = emp == null ? null : emp.path("base_info");
+    if (base == null || base.isMissingNode()) {
+      return 2;
+    }
+    if (!base.has("subscription_ids")) {
+      return 2;
+    }
+    JsonNode ids = base.path("subscription_ids");
+    if (!ids.isArray() || ids.size() == 0) {
+      return 0;
+    }
+    for (JsonNode id : ids) {
+      if (id != null && !id.asText("").trim().isEmpty()) {
+        return 1;
+      }
+    }
+    return 0;
   }
 
   private static String fetchTenantAccessToken(String appId, String appSecret) throws Exception {

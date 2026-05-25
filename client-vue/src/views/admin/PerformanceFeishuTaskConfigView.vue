@@ -35,6 +35,8 @@ async function load() {
   try {
     const data = await getPerformanceFeishuTaskConfig();
     items.value = Array.isArray(data.items) ? data.items : [];
+    enabled.value = data.enabled ?? true;
+    savedEnabled.value = enabled.value;
     const m: Record<string, number> = {};
     for (const row of items.value) {
       m[row.nodeKey] = row.dueDays;

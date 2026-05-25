@@ -23,7 +23,8 @@ public class EmployeeController {
   private final EmployeeService employeeService;
   private final MenuPermissionService menuPermissionService;
 
-  public EmployeeController(EmployeeService employeeService, MenuPermissionService menuPermissionService) {
+  public EmployeeController(
+      EmployeeService employeeService, MenuPermissionService menuPermissionService) {
     this.employeeService = employeeService;
     this.menuPermissionService = menuPermissionService;
   }
@@ -65,6 +66,28 @@ public class EmployeeController {
     }
     employeeService.updateEmployee(employeeId, body);
     return singleSuccess();
+  }
+
+  /** 使用多段路径，避免被 {@code PUT /{id}} 将 {@code batch-assessment-rule} 当作 id 匹配导致 POST 405。 */
+  @PostMapping("/batch/assessment-rule")
+  public Map<String, Object> batchAssessmentRule(
+      @CurrentUser String userId, @RequestBody Map<String, Object> body) {
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
+    List<String> employeeIds = new ArrayList<String>();
+    Object rawIds = body == null ? null : body.get("employeeIds");
+    if (rawIds instanceof List) {
+      for (Object item : (List<?>) rawIds) {
+        if (item != null && !String.valueOf(item).trim().isEmpty()) {
+          employeeIds.add(String.valueOf(item).trim());
+        }
+      }
+    }
+    Object ruleObj = body == null ? null : body.get("assessmentRuleId");
+    if (ruleObj == null && body != null) {
+      ruleObj = body.get("assessment_rule_id");
+    }
+    String assessmentRuleId = ruleObj == null ? "" : String.valueOf(ruleObj);
+    return employeeService.batchUpdateAssessmentRule(employeeIds, assessmentRuleId);
   }
 
   @DeleteMapping("/{id}")
@@ -119,6 +142,36 @@ public class EmployeeController {
     return out;
   }
 
+  /** 从飞书通讯录 upsert 员工；未传 subjectCodes 时同步全部已配置主体。 */
+  @PostMapping("/sync-from-feishu")
+  public Map<String, Object> syncFromFeishu(
+      @CurrentUser String userId, @RequestBody(required = false) Map<String, Object> body) {
+    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
+    List<String> subjectCodes = null;
+    if (body != null && body.get("subjectCodes") instanceof List) {
+      subjectCodes = new ArrayList<String>();
+      for (Object item : (List<?>) body.get("subjectCodes")) {
+        if (item != null && !String.valueOf(item).trim().isEmpty()) {
+          subjectCodes.add(String.valueOf(item).trim());
+        }
+      }
+    }
+    try {
+      return employeeService.syncAllSubjectsFromFeishu(subjectCodes);
+    } catch (Exception e) {
+      Map<String, Object> out = new LinkedHashMap<String, Object>();
+      out.put("success", Boolean.FALSE);
+      out.put("createdCount", 0);
+      out.put("updatedCount", 0);
+      out.put("failedCount", 0);
+      out.put("deletedCount", 0);
+      out.put("createdNames", new ArrayList<String>());
+      out.put("subjects", new ArrayList<Map<String, Object>>());
+      out.put("message", e.getMessage());
+      return out;
+    }
+  }
+
   @PostMapping("/sync-from-lark")
   public Map<String, Object> syncFromLark(
       @CurrentUser String userId, @RequestBody Map<String, Object> body) {
@@ -160,34 +213,6 @@ public class EmployeeController {
       @CurrentUser String userId, @RequestParam String subjectCode, @RequestParam String openId) {
     menuPermissionService.assertMenuAllowed(userId, "admin_employees");
     return employeeService.fetchFeishuUserProfile(subjectCode, openId);
-  }
-
-  @GetMapping("/calibration-assignees")
-  public Map<String, Object> calibrationAssigneesGet(@CurrentUser String userId) {
-    menuPermissionService.assertMenuAllowed(userId, "admin_employees");
-    Map<String, Object> out = new LinkedHashMap<String, Object>();
-    out.put("items", employeeService.listCalibrationAssigneesWithNames());
-    return out;
-  }
-
-  @PutMapping("/calibration-assignees")
-  public Map<String, Boolean> calibrationAssigneesPut(
-      @CurrentUser String userId, @RequestBody Map<String, Object> body) {
-    Object raw = body == null ? null : body.get("employeeIds");
-    List<String> ids = new ArrayList<String>();
-    if (raw instanceof List) {
-      for (Object o : (List<?>) raw) {
-        if (o == null) {
-          continue;
-        }
-        String t = String.valueOf(o).trim();
-        if (!t.isEmpty()) {
-          ids.add(t);
-        }
-      }
-    }
-    employeeService.setCalibrationAssigneeEmployeeIds(userId, ids);
-    return singleSuccess();
   }
 
   private static List<Map<String, Object>> mapEmployeeItems(List<Map<String, Object>> hierarchies) {

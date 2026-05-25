@@ -143,58 +143,74 @@ watch([page, pageSize], () => {
       <section class="ui-list-panel">
       <div v-if="loading" class="ui-loading">加载中...</div>
       <div v-else-if="items.length === 0" class="ui-empty">暂无数据</div>
-      <div v-else class="ui-table-wrap">
-        <table class="ui-table">
-          <thead>
-            <tr>
-              <th>员工</th>
-              <th>周期</th>
-              <th>状态</th>
-              <th>直属上级</th>
-              <th>虚线上级</th>
-              <th>更新时间</th>
-              <th class="w-28">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in items" :key="r.id">
-              <td>
-                <UserDisplay
-                  size="small"
-                  :value="{ user_id: r.employeeId, name: r.employeeName || r.employeeId }"
-                />
-              </td>
-              <td>
-                <span class="ui-period" :title="r.period">{{ periodLabel(r.period) }}</span>
-              </td>
-              <td>
-                <PerformanceStatusBadge :status="r.status" />
-              </td>
-              <td>
-                <UserDisplay
-                  size="small"
-                  :value="{ user_id: r.managerId, name: r.managerName || r.managerId }"
-                />
-              </td>
-              <td>
-                <UserDisplay
-                  v-if="r.dottedManagerId"
-                  size="small"
-                  :value="{ user_id: r.dottedManagerId, name: r.dottedManagerName || r.dottedManagerId }"
-                />
-                <span v-else class="text-muted-foreground">-</span>
-              </td>
-              <td class="text-muted-foreground">{{ formatDateTime(r.updatedAt) }}</td>
-              <td>
-                <button type="button" class="ui-btn-ghost ui-btn-sm" @click="router.push(`/performances/${r.id}`)">
-                  详情
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <template v-else>
+        <div class="ui-mobile-cards p-3">
+          <div v-for="r in items" :key="r.id" class="ui-mobile-card">
+            <div class="flex items-start justify-between gap-2">
+              <UserDisplay size="small" :value="{ user_id: r.employeeId, name: r.employeeName || r.employeeId }" class="font-medium" />
+              <PerformanceStatusBadge :status="r.status" />
+            </div>
+            <p class="mt-1 text-xs text-muted-foreground">{{ periodLabel(r.period) }}</p>
+            <div class="mt-3">
+              <button type="button" class="ui-btn-primary ui-btn-sm w-full" @click="router.push(`/performances/${r.id}`)">详情</button>
+            </div>
+          </div>
         </div>
-        <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
+        <div class="ui-desktop-table">
+          <div class="ui-table-wrap">
+            <table class="ui-table min-w-[800px]">
+              <thead>
+                <tr>
+                  <th>员工</th>
+                  <th>周期</th>
+                  <th>状态</th>
+                  <th>直属上级</th>
+                  <th>虚线上级</th>
+                  <th>更新时间</th>
+                  <th class="w-28">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in items" :key="r.id">
+                  <td>
+                    <UserDisplay
+                      size="small"
+                      :value="{ user_id: r.employeeId, name: r.employeeName || r.employeeId }"
+                    />
+                  </td>
+                  <td>
+                    <span class="ui-period" :title="r.period">{{ periodLabel(r.period) }}</span>
+                  </td>
+                  <td>
+                    <PerformanceStatusBadge :status="r.status" />
+                  </td>
+                  <td>
+                    <UserDisplay
+                      size="small"
+                      :value="{ user_id: r.managerId, name: r.managerName || r.managerId }"
+                    />
+                  </td>
+                  <td>
+                    <UserDisplay
+                      v-if="r.dottedManagerId"
+                      size="small"
+                      :value="{ user_id: r.dottedManagerId, name: r.dottedManagerName || r.dottedManagerId }"
+                    />
+                    <span v-else class="text-muted-foreground">-</span>
+                  </td>
+                  <td class="text-muted-foreground">{{ formatDateTime(r.updatedAt) }}</td>
+                  <td>
+                    <button type="button" class="ui-btn-ghost ui-btn-sm" @click="router.push(`/performances/${r.id}`)">
+                      详情
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+      <ListPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </section>
     </template>
   </div>

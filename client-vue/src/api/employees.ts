@@ -1,15 +1,17 @@
 import type {
+  BatchUpdateEmployeeAssessmentRuleRequest,
+  BatchUpdateEmployeeAssessmentRuleResponse,
   CreateEmployeeRequest,
   EmployeeDirectoryListItem,
   EmployeeListResponse,
   EmployeeRoleOption,
-  PerformanceCalibrationAssignee,
   DepartmentOption,
   DepartmentTreeSubject,
   FeishuSubjectOption,
   FeishuUserProfileResponse,
   FeishuUserOptionsResponse,
   SyncEmployeesResponse,
+  SyncFeishuEmployeesResponse,
   UpdateEmployeeHierarchyRequest,
   UpdateEmployeeRequest,
 } from "@/types/api.interface";
@@ -30,19 +32,6 @@ export async function getAllEmployees(params?: { subjectCode?: string }): Promis
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return apiJson<{ items: EmployeeDirectoryListItem[] }>(`/api/employees/all${suffix}`, {
     method: "GET",
-  });
-}
-
-export async function getCalibrationAssignees(): Promise<{ items: PerformanceCalibrationAssignee[] }> {
-  return apiJson<{ items: PerformanceCalibrationAssignee[] }>("/api/employees/calibration-assignees", {
-    method: "GET",
-  });
-}
-
-export async function setCalibrationAssignees(body: { employeeIds: string[] }): Promise<{ success: boolean }> {
-  return apiJson<{ success: boolean }>("/api/employees/calibration-assignees", {
-    method: "PUT",
-    body: JSON.stringify(body),
   });
 }
 
@@ -88,6 +77,15 @@ export async function createEmployee(body: CreateEmployeeRequest): Promise<{ id:
 export async function updateEmployee(employeeId: string, body: UpdateEmployeeRequest): Promise<{ success: boolean }> {
   return apiJson<{ success: boolean }>(`/api/employees/${encodeURIComponent(employeeId)}`, {
     method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function batchUpdateEmployeeAssessmentRule(
+  body: BatchUpdateEmployeeAssessmentRuleRequest,
+): Promise<BatchUpdateEmployeeAssessmentRuleResponse> {
+  return apiJson<BatchUpdateEmployeeAssessmentRuleResponse>("/api/employees/batch/assessment-rule", {
+    method: "POST",
     body: JSON.stringify(body),
   });
 }
@@ -144,6 +142,39 @@ export async function getFeishuUserProfile(params: {
   return apiJson<FeishuUserProfileResponse>(`/api/employees/feishu-user-profile?${q.toString()}`, {
     method: "GET",
   });
+}
+
+export async function syncEmployeesFromFeishu(
+  subjectCodes?: string[],
+): Promise<SyncFeishuEmployeesResponse> {
+  try {
+    const body =
+      subjectCodes && subjectCodes.length > 0 ? { subjectCodes } : {};
+    const data = await apiJson<SyncFeishuEmployeesResponse>("/api/employees/sync-from-feishu", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (!data || typeof data.success !== "boolean") {
+      return {
+        success: false,
+        createdCount: 0,
+        updatedCount: 0,
+        failedCount: 0,
+        subjects: [],
+        message: "同步返回无效数据，请稍后重试",
+      };
+    }
+    return data;
+  } catch (error: unknown) {
+    return {
+      success: false,
+      createdCount: 0,
+      updatedCount: 0,
+      failedCount: 0,
+      subjects: [],
+      message: error instanceof Error ? error.message : "同步失败，请检查网络或飞书配置",
+    };
+  }
 }
 
 export async function syncEmployeesFromLark(subjectCode: string, clearExisting: boolean): Promise<SyncEmployeesResponse> {

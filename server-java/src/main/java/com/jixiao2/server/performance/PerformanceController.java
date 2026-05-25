@@ -41,6 +41,11 @@ public class PerformanceController {
     return result;
   }
 
+  @GetMapping("/node-deadlines-default")
+  public Map<String, Object> defaultNodeDeadlines(@RequestParam String period) {
+    return performanceService.defaultNodeDeadlinesForPeriod(period);
+  }
+
   @GetMapping("/create/month-periods")
   public Map<String, Object> listMonthPeriodsForCreate(@CurrentUser String userId) {
     return performanceService.listMonthPeriodsForCreate(userId);
@@ -142,6 +147,28 @@ public class PerformanceController {
   public Map<String, Object> calibrate(
       @CurrentUser String userId, @PathVariable String id, @RequestBody Map<String, Object> body) {
     return performanceService.calibrate(userId, id, body);
+  }
+
+  @PostMapping("/{id}/start-self-review")
+  public Map<String, Object> startSelfReview(@CurrentUser String userId, @PathVariable String id) {
+    return performanceService.startSelfReview(userId, id);
+  }
+
+  @PostMapping("/{id}/issue-self-review")
+  public Map<String, Object> issueSelfReview(@CurrentUser String userId, @PathVariable String id) {
+    return performanceService.issueSelfReview(userId, id);
+  }
+
+  @PostMapping("/batch-issue-self-review")
+  public Map<String, Object> batchIssueSelfReview(
+      @CurrentUser String userId, @RequestBody Map<String, Object> body) {
+    return performanceService.batchIssueSelfReview(userId, body);
+  }
+
+  @PostMapping("/{id}/rollback-plan-anchor")
+  public Map<String, Object> rollbackPlanToDeadlineAnchor(
+      @CurrentUser String userId, @PathVariable String id, @RequestBody(required = false) Map<String, Object> body) {
+    return performanceService.rollbackPlanToDeadlineAnchor(userId, id, body == null ? new java.util.LinkedHashMap<String, Object>() : body);
   }
 
   @PostMapping("/{id}/confirm-result")

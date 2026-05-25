@@ -2,7 +2,13 @@
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 import type { TodoItem } from "@/types/api.interface";
-import { getTodoMeta, groupTodosByBucket, todoActionClass, todoBadgeClass, todoRowClass } from "@/constants/todoStatus";
+import {
+  getTodoMeta,
+  groupTodosByBucket,
+  todoActionClass,
+  todoBadgeClass,
+  todoRowClass,
+} from "@/constants/todoStatus";
 import { formatPeriodDisplay } from "@/utils/period";
 import { shortPersonDisplayName } from "@/utils/user";
 import { useSessionStore } from "@/stores/session";
@@ -23,6 +29,21 @@ const props = withDefaults(
 const session = useSessionStore();
 const grouped = computed(() => groupTodosByBucket(props.items, session.userId));
 
+const sections = computed(
+  () =>
+    [
+      { key: "mine" as const, label: "我的待办", items: grouped.value.mine, badge: "ui-badge-warning", showCount: true },
+      { key: "team" as const, label: "团队待办", items: grouped.value.team, badge: "ui-badge-info", showCount: true },
+      {
+        key: "flow" as const,
+        label: "流程待办",
+        items: grouped.value.flow,
+        badge: "ui-badge-neutral",
+        showCount: false,
+      },
+    ] as const,
+);
+
 function employeeLabel(item: TodoItem): string {
   if (item.employeeName?.trim()) return shortPersonDisplayName(item.employeeName);
   const head = item.title.split(" · ")[0]?.trim();
@@ -34,11 +55,13 @@ function employeeLabel(item: TodoItem): string {
   <p v-if="items.length === 0" class="py-10 text-center text-sm text-muted-foreground">{{ emptyText }}</p>
 
   <template v-else-if="layout === 'table'">
-    <template v-for="section in [{ key: 'mine', label: '我的待办', items: grouped.mine, badge: 'ui-badge-warning' }, { key: 'team', label: '团队待办', items: grouped.team, badge: 'ui-badge-info' }] as const" :key="section.key">
+    <template v-for="section in sections" :key="section.key">
       <section v-if="section.items.length > 0" class="mb-6 last:mb-0">
         <div class="mb-3 flex items-center justify-between gap-3">
           <h3 class="text-sm font-semibold text-foreground">{{ section.label }}</h3>
-          <span class="ui-badge" :class="section.badge">待处理 {{ section.items.length }}</span>
+          <span v-if="section.showCount" class="ui-badge" :class="section.badge">
+            待处理 {{ section.items.length }}
+          </span>
         </div>
         <div class="ui-table-wrap">
           <table class="ui-table min-w-[720px]">
@@ -94,52 +117,38 @@ function employeeLabel(item: TodoItem): string {
         </div>
       </section>
     </template>
-    <p v-if="!grouped.mine.length && !grouped.team.length" class="py-10 text-center text-sm text-muted-foreground">
+    <p
+      v-if="!grouped.mine.length && !grouped.team.length && !grouped.flow.length"
+      class="py-10 text-center text-sm text-muted-foreground"
+    >
       {{ emptyText }}
     </p>
   </template>
 
   <div v-else class="space-y-6">
-    <section v-if="grouped.mine.length > 0">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <h3 class="text-sm font-semibold text-foreground">我的待办</h3>
-        <span class="ui-badge ui-badge-warning">待处理 {{ grouped.mine.length }}</span>
-      </div>
-      <ul class="space-y-3">
-        <li v-for="item in grouped.mine" :key="item.id">
-          <RouterLink :to="`/performances/${item.id}`" class="ui-todo-link" :class="todoRowClass(item.type)">
-            <div class="min-w-0 flex-1">
-              <div class="mb-2">
-                <span class="ui-badge" :class="todoBadgeClass(item.type)">{{ getTodoMeta(item.type).label }}</span>
+    <section v-for="section in sections" :key="section.key">
+      <template v-if="section.items.length > 0">
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <h3 class="text-sm font-semibold text-foreground">{{ section.label }}</h3>
+          <span v-if="section.showCount" class="ui-badge" :class="section.badge">
+            待处理 {{ section.items.length }}
+          </span>
+        </div>
+        <ul class="space-y-3">
+          <li v-for="item in section.items" :key="item.id">
+            <RouterLink :to="`/performances/${item.id}`" class="ui-todo-link" :class="todoRowClass(item.type)">
+              <div class="min-w-0 flex-1">
+                <div class="mb-2">
+                  <span class="ui-badge" :class="todoBadgeClass(item.type)">{{ getTodoMeta(item.type).label }}</span>
+                </div>
+                <p class="truncate text-base font-semibold text-foreground">{{ employeeLabel(item) }}</p>
+                <p class="mt-1 text-sm text-muted-foreground">周期：{{ formatPeriodDisplay(item.period) }}</p>
               </div>
-              <p class="truncate text-base font-semibold text-foreground">{{ employeeLabel(item) }}</p>
-              <p class="mt-1 text-sm text-muted-foreground">周期：{{ formatPeriodDisplay(item.period) }}</p>
-            </div>
-            <span class="shrink-0" :class="todoActionClass(item.type)">{{ getTodoMeta(item.type).actionLabel }}</span>
-          </RouterLink>
-        </li>
-      </ul>
-    </section>
-
-    <section v-if="grouped.team.length > 0">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <h3 class="text-sm font-semibold text-foreground">团队待办</h3>
-        <span class="ui-badge ui-badge-info">待处理 {{ grouped.team.length }}</span>
-      </div>
-      <ul class="space-y-3">
-        <li v-for="item in grouped.team" :key="item.id">
-          <RouterLink :to="`/performances/${item.id}`" class="ui-todo-link" :class="todoRowClass(item.type)">
-            <div class="min-w-0 flex-1">
-              <div class="mb-2">
-                <span class="ui-badge" :class="todoBadgeClass(item.type)">{{ getTodoMeta(item.type).label }}</span>
-              </div>
-              <p class="truncate text-base font-semibold text-foreground">{{ employeeLabel(item) }}</p>
-              <p class="mt-1 text-sm text-muted-foreground">周期：{{ formatPeriodDisplay(item.period) }}</p>
-            </div>
-            <span class="shrink-0" :class="todoActionClass(item.type)">{{ getTodoMeta(item.type).actionLabel }}</span>
-          </RouterLink>
-        </li>
-      </ul>
+              <span class="shrink-0" :class="todoActionClass(item.type)">{{ getTodoMeta(item.type).actionLabel }}</span>
+            </RouterLink>
+          </li>
+        </ul>
+      </template>
     </section>
   </div>
 </template>

@@ -1,0 +1,86 @@
+{
+  "info": {
+    "name": "绩效截止自动流转（单接口）",
+    "description": "测试截止自动流转。\n- forceAdvance=true：不判截止日，按当前状态推进一步（含 final_review→issued 待员工确认）\n- 定时器每日 01:10：asOfDate 晚于 node_deadlines.final 时 final_review→issued；晚于 confirm 时 issued→completed\n\n变量：baseUrl、performance_id；需先登录。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8081" },
+    { "key": "jx_session", "value": "" },
+    { "key": "performance_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1 Login (super admin)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const c = pm.response && pm.response.code;",
+              "if (c == null || c < 200 || c >= 300) return;",
+              "let raw = pm.response.headers.get('Set-Cookie') || '';",
+              "const m = String(raw).match(/jx_session=([^;]+)/);",
+              "if (m) pm.collectionVariables.set('jx_session', decodeURIComponent(m[1]));",
+              "pm.test('HTTP 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"zhou_rong\",\n  \"password\": \"123456\"\n}"
+        },
+        "url": "{{baseUrl}}/api/auth/password/login"
+      }
+    },
+    {
+      "name": "2 GET 流转前详情",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Cookie", "value": "jx_session={{jx_session}}" }],
+        "url": "{{baseUrl}}/api/performances/{{performance_id}}"
+      }
+    },
+    {
+      "name": "3 POST 强制自动流转",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+              "const j = pm.response.json();",
+              "console.log('changes', JSON.stringify(j.changes, null, 2));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Cookie", "value": "jx_session={{jx_session}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"recordId\": \"{{performance_id}}\",\n  \"forceAdvance\": true\n}"
+        },
+        "url": "{{baseUrl}}/api/performances/ops/deadline-auto"
+      }
+    },
+    {
+      "name": "4 GET 流转后详情",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Cookie", "value": "jx_session={{jx_session}}" }],
+        "url": "{{baseUrl}}/api/performances/{{performance_id}}"
+      }
+    }
+  ]
+}

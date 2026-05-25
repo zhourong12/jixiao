@@ -2,9 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { apiJson } from "@/api/http";
-import { getFeishuLoginSubjects } from "@/api/employees";
-import type { FeishuSubjectOption } from "@/types/api.interface";
-import { passwordLoginEnabledFromEnv } from "@/config/login";
+import { usePasswordLoginEnabled } from "@/composables/usePasswordLoginEnabled";
 import { useSessionStore } from "@/stores/session";
 
 const route = useRoute();
@@ -14,10 +12,10 @@ const username = ref("");
 const password = ref("");
 const error = ref("");
 const loading = ref(false);
-const feishuSubjects = ref<FeishuSubjectOption[]>([]);
-const passwordLoginEnabled = ref(passwordLoginEnabledFromEnv);
+const { passwordLoginEnabled, loaded, feishuSubjects } = usePasswordLoginEnabled({ loadFeishuSubjects: true });
 
-const feishuOnly = computed(() => !passwordLoginEnabled.value);
+const showPasswordForm = computed(() => loaded.value && passwordLoginEnabled.value);
+const feishuOnly = computed(() => loaded.value && !passwordLoginEnabled.value);
 
 onMounted(() => {
   const q = route.query.login_error;
@@ -29,17 +27,6 @@ onMounted(() => {
       error.value = msg;
     }
   }
-  void (async () => {
-    try {
-      const res = await getFeishuLoginSubjects();
-      feishuSubjects.value = res.items || [];
-      if (typeof res.passwordLoginEnabled === "boolean") {
-        passwordLoginEnabled.value = res.passwordLoginEnabled;
-      }
-    } catch {
-      feishuSubjects.value = [];
-    }
-  })();
 });
 
 async function onSubmit() {
@@ -72,7 +59,7 @@ function goFeishuWithSubject(subjectCode: string) {
 
 <template>
   <div
-    class="relative flex min-h-screen items-center justify-center overflow-hidden p-6"
+    class="relative flex min-h-screen items-center justify-center overflow-hidden p-4 md:p-6"
     :class="feishuOnly ? 'bg-[hsl(215_25%_97%)]' : 'bg-background'"
   >
     <div
@@ -88,28 +75,27 @@ function goFeishuWithSubject(subjectCode: string) {
 
     <div
       class="relative w-full shadow-sm"
-      :class="feishuOnly ? 'max-w-md rounded-lg border border-border/60 bg-card p-10' : 'ui-card max-w-lg p-8'"
+      :class="feishuOnly ? 'max-w-md rounded-lg border border-border/60 bg-card p-6 md:p-10' : 'ui-card max-w-lg p-6 md:p-8'"
     >
       <div
         class="flex flex-col items-center text-center"
         :class="feishuOnly ? '' : 'sm:flex-row sm:items-start sm:text-left sm:gap-4'"
       >
-        <div
-          class="flex shrink-0 items-center justify-center rounded-full bg-primary/15 font-bold text-primary"
-          :class="feishuOnly ? 'h-16 w-16 text-2xl' : 'h-14 w-14 text-lg'"
-          aria-hidden="true"
-        >
-          绩
-        </div>
+        <img
+          src="/app-logo.png"
+          alt="科臻赛绩效"
+          class="shrink-0 rounded-lg object-contain"
+          :class="feishuOnly ? 'h-16 w-16' : 'h-14 w-14'"
+        />
         <div class="min-w-0 flex-1" :class="feishuOnly ? 'mt-6' : ''">
-          <h1 class="text-2xl font-bold leading-tight text-foreground">绩效</h1>
-          <p v-if="!feishuOnly" class="mt-1 text-sm text-muted-foreground">
+          <h1 class="text-2xl font-bold leading-tight text-foreground">科臻赛绩效</h1>
+          <p v-if="showPasswordForm" class="mt-1 text-sm text-muted-foreground">
             使用员工编号或姓名登录；演示环境默认密码为 123456。
           </p>
         </div>
       </div>
 
-      <template v-if="passwordLoginEnabled">
+      <template v-if="showPasswordForm">
         <form class="mt-8 space-y-4" @submit.prevent="onSubmit">
           <div>
             <label class="ui-label">员工编号或姓名</label>
@@ -167,7 +153,8 @@ function goFeishuWithSubject(subjectCode: string) {
 
       <template v-else>
         <p v-if="error" class="ui-alert-danger mt-8">{{ error }}</p>
-        <div v-if="feishuSubjects.length" class="mt-10 space-y-3">
+        <p v-if="!loaded" class="mt-10 text-center text-sm text-muted-foreground">加载中…</p>
+        <div v-else-if="feishuSubjects.length" class="mt-10 space-y-3">
           <button
             v-for="s in feishuSubjects"
             :key="s.code"
@@ -178,7 +165,7 @@ function goFeishuWithSubject(subjectCode: string) {
             飞书账号登录（{{ s.name }}）
           </button>
         </div>
-        <p v-else class="mt-10 text-center text-sm text-muted-foreground">
+        <p v-else-if="loaded" class="mt-10 text-center text-sm text-muted-foreground">
           未配置可登录的飞书主体，请联系管理员在库中维护 feishu_subject / feishu_app。
         </p>
       </template>

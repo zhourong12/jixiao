@@ -240,7 +240,10 @@ public class MenuPermissionService {
     }
     List<String> superOnly =
         java.util.Arrays.asList(
-            "performance_export", "performance_batch_create", "admin_performance_calibration");
+            "performance_export",
+            "performance_batch_create",
+            "admin_performance_calibration",
+            "admin_api_tokens");
     for (Map.Entry<String, Object> e : menus.entrySet()) {
       String menuKey = e.getKey() == null ? "" : String.valueOf(e.getKey()).trim();
       if (menuKey.isEmpty()) {
@@ -258,7 +261,7 @@ public class MenuPermissionService {
         if (allowed) {
           throw new ResponseStatusException(
               HttpStatus.BAD_REQUEST,
-              "导出绩效、批量创建与「绩效校准（上级评分）」仅超级管理员可用，不可授予其他角色");
+              "该菜单仅超级管理员可用，不可授予其他角色");
         }
         jdbc.update(
             "INSERT INTO role_menu (role_key, menu_key, allowed) VALUES (?,?,0) "

@@ -1,5 +1,6 @@
 import type {
   ApproveGoalRequest,
+  BatchIssueSelfReviewResponse,
   CalibrationReviewRequest,
   CreatePerformanceRequest,
   CreatePerformanceResponse,
@@ -10,6 +11,7 @@ import type {
   PerformanceListResponse,
   PerformanceRecord,
   RejectPerformanceRequest,
+  AdminRejectSelfReviewRequest,
   SaveDraftRequest,
   SaveGoalIndicatorsRequest,
   SelectTemplateRequest,
@@ -76,6 +78,15 @@ export async function rejectPerformance(id: string, body: RejectPerformanceReque
   });
 }
 
+export async function adminRejectSelfReview(
+  body: AdminRejectSelfReviewRequest,
+): Promise<{ success: boolean; newStatus?: string }> {
+  return apiJson<{ success: boolean; newStatus?: string }>(`/api/performances/ops/reject-self-review`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function approveGoal(id: string, body: ApproveGoalRequest): Promise<SubmitReviewResponse> {
   return apiJson<SubmitReviewResponse>(`/api/performances/${encodeURIComponent(id)}/approve-goal`, {
     method: "POST",
@@ -115,6 +126,45 @@ export async function saveGoalIndicators(id: string, body: SaveGoalIndicatorsReq
     method: "PUT",
     body: JSON.stringify(body),
   });
+}
+
+export async function getDefaultNodeDeadlines(
+  period: string,
+): Promise<{ nodeDeadlines: Record<string, string> }> {
+  const q = new URLSearchParams({ period });
+  return apiJson<{ nodeDeadlines: Record<string, string> }>(
+    `/api/performances/node-deadlines-default?${q.toString()}`,
+    { method: "GET" },
+  );
+}
+
+export async function startSelfReview(id: string): Promise<SubmitReviewResponse> {
+  return apiJson<SubmitReviewResponse>(`/api/performances/${encodeURIComponent(id)}/start-self-review`, {
+    method: "POST",
+  });
+}
+
+export async function issueSelfReview(id: string): Promise<SubmitReviewResponse> {
+  return apiJson<SubmitReviewResponse>(`/api/performances/${encodeURIComponent(id)}/issue-self-review`, {
+    method: "POST",
+  });
+}
+
+export async function batchIssueSelfReview(recordIds: string[]): Promise<BatchIssueSelfReviewResponse> {
+  return apiJson<BatchIssueSelfReviewResponse>("/api/performances/batch-issue-self-review", {
+    method: "POST",
+    body: JSON.stringify({ recordIds }),
+  });
+}
+
+export async function rollbackPlanToDeadlineAnchor(
+  id: string,
+  body?: { deadline?: string },
+): Promise<SubmitReviewResponse & { deadlineFlowAnchor?: string; deadline?: string }> {
+  return apiJson<SubmitReviewResponse & { deadlineFlowAnchor?: string; deadline?: string }>(
+    `/api/performances/${encodeURIComponent(id)}/rollback-plan-anchor`,
+    { method: "POST", body: JSON.stringify(body ?? {}) },
+  );
 }
 
 export async function createPerformance(body: CreatePerformanceRequest): Promise<CreatePerformanceResponse> {
